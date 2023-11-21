@@ -1,0 +1,66 @@
+name: Build
+
+on:
+    workflow_dispatch:
+permissions: write-all
+jobs:
+    build-and-release:
+        environment:
+          name: github-pages
+          url: ${{ steps.deployment.outputs.page_url }}
+        runs-on: ubuntu-22.04
+        steps:
+            - name: "Git checkout"
+              uses: actions/checkout@v3
+            - name: "Install Dependencies"
+              run: |
+                sudo apt update && sudo apt -y install gnupg gzip upx wget make apt-utils sudo dpkg-dev alien createrepo-c
+            - name: "Install golang"
+              run: |
+                wget -q https://go.dev/dl/go1.21.4.linux-amd64.tar.gz && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.21.4.linux-amd64.tar.gz && echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.$(cat /proc/$$/comm)rc
+            - name: "Build binaries"
+              run: |
+                set -e
+                source ~/.$(cat /proc/$$/comm)rc
+                cd ~/work/docker-systemd/docker-systemd && make cleanbuild
+            - name: "Create a deb repository"
+              env:
+                  gpgprivate: ${{ secrets.GPGPRIVATE }}
+                  email: ${{ secrets.GPGEMAIL }}
+              run: |
+                set -e
+                source ~/.$(cat /proc/$$/comm)rc
+                cd ~/work/docker-systemd/docker-systemd && make pkg-deb
+            - name: "Create and sign rpm packages"
+              run: |
+                set -e
+                source ~/.$(cat /proc/$$/comm)rc
+                cd ~/work/docker-systemd/docker-systemd/repo && mkdir -p rh/Packages && cd rh/Packages && alien --to-rpm --target x86_64 ../../ubuntu/docker-systemd_0.3.0_amd64.deb && alien --to-rpm --target aarch64 ../../ubuntu/docker-systemd_0.3.0_arm64.deb
+                [ ! -f /usr/bin/gpg2 ] && ln -s /usr/bin/gpg /usr/bin/gpg2
+                echo -e "%_signature gpg\n%_gpg_path $HOME/.gnupg\n%_gpg_name Robert Glonek\n%_gpgbin /usr/bin/gpg\n%__gpg_sign_cmd %{__gpg} gpg --force-v3-sigs --batch --verbose --no-armor --no-secmem-warning -u \"%{_gpg_name}\" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}'\n" > ~/.rpmmacros
+                cd ~/work/docker-systemd/docker-systemd/repo/rh/Packages && rpm --import ../../ubuntu/KEY.gpg && rpmsign --addsign docker-systemd*rpm
+            - name: "Create an rpm repository"
+              run: |
+                set -e
+                source ~/.$(cat /proc/$$/comm)rc
+                cd ~/work/docker-systemd/docker-systemd/repo/rh
+                createrepo_c -u https://rglonek.github.io/docker-systemd/rh .
+            - name: "Create a new release"
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                set -e
+                cd ~/work/docker-systemd/docker-systemd/bin
+                COMMIT=$(git rev-parse --short HEAD)
+                TAG=$(cat ../VERSION)
+                FULLCOMMIT=$(git rev-parse HEAD)
+                gh release create -R github.com/rglonek/docker-systemd --notes-file ../CHANGELOG.md --target ${FULLCOMMIT} --title "v${TAG} - ${COMMIT}" ${TAG} systemd-amd64 systemd-arm64 ../repo/ubuntu/*deb ../repo/rh/Packages/*rpm
+            - name: Setup Pages
+              uses: actions/configure-pages@v3
+            - name: Upload artifact
+              uses: actions/upload-pages-artifact@v2
+              with:
+                path: './repo'
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v2
