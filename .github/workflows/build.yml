@@ -35,7 +35,9 @@ jobs:
               run: |
                 set -e
                 source ~/.$(cat /proc/$$/comm)rc
-                cd ~/work/docker-systemd/docker-systemd/repo && mkdir -p rh/Packages && cd rh/Packages && alien --to-rpm --target x86_64 ../../ubuntu/docker-systemd_0.3.0_amd64.deb && alien --to-rpm --target aarch64 ../../ubuntu/docker-systemd_0.3.0_arm64.deb
+                cd ~/work/docker-systemd/docker-systemd
+                TAG=$(cat VERSION)
+                cd ~/work/docker-systemd/docker-systemd/repo && mkdir -p rh/Packages && cd rh/Packages && alien --to-rpm --target x86_64 ../../ubuntu/docker-systemd_${TAG}_amd64.deb && alien --to-rpm --target aarch64 ../../ubuntu/docker-systemd_${TAG}_arm64.deb
                 [ ! -f /usr/bin/gpg2 ] && ln -s /usr/bin/gpg /usr/bin/gpg2
                 echo -e "%_signature gpg\n%_gpg_path $HOME/.gnupg\n%_gpg_name Robert Glonek\n%_gpgbin /usr/bin/gpg\n%__gpg_sign_cmd %{__gpg} gpg --force-v3-sigs --batch --verbose --no-armor --no-secmem-warning -u \"%{_gpg_name}\" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}'\n" > ~/.rpmmacros
                 cd ~/work/docker-systemd/docker-systemd/repo/rh/Packages && rpm --import ../../ubuntu/KEY.gpg && rpmsign --addsign docker-systemd*rpm
