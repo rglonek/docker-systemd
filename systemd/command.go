@@ -123,6 +123,16 @@ func (c *cmdDeleteInstance) Execute(args []string) error {
 }
 
 func (c *cmdEnable) Execute(args []string) error {
+	startOnEnable := false
+	newArgs := []string{}
+	for _, arg := range args {
+		if arg == "--now" {
+			startOnEnable = true
+			continue
+		}
+		newArgs = append(newArgs, arg)
+	}
+	args = newArgs
 	needReload := false
 	for _, arg := range args {
 		if !strings.Contains(arg, "@") {
@@ -156,6 +166,17 @@ func (c *cmdEnable) Execute(args []string) error {
 		if err != nil {
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
 		}
+	}
+	if startOnEnable {
+		for _, daemon := range ds {
+			err := daemon.Start()
+			if err != nil {
+				return MakeResponse(daemon.Name()+": "+err.Error(), true)
+			}
+		}
+	}
+	if startOnEnable {
+		return MakeResponse("Services Enabled and Started", false)
 	}
 	return MakeResponse("Services Enabled", false)
 }

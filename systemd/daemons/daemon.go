@@ -360,7 +360,7 @@ func (d *daemon) monitorCmds(l *Logger) {
 	}
 }
 
-func (d *daemon) runOnFailure(l *Logger) {
+func (d *daemon) runOnFailure(*Logger) {
 	for ii, i := range d.def.OnFailure {
 		err := i.start(false)
 		if err != nil {
@@ -369,7 +369,7 @@ func (d *daemon) runOnFailure(l *Logger) {
 	}
 }
 
-func (d *daemon) runOnSuccess(l *Logger) {
+func (d *daemon) runOnSuccess(*Logger) {
 	for ii, i := range d.def.OnSuccess {
 		err := i.start(false)
 		if err != nil {
