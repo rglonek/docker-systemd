@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## v0.3.1
+* add `--now` option to `systemctl enable`
+
 ## v0.3.0
 * big change - not using double-process-init method for controlling and reaping processes; instead using a single init with a single dispatching `syscall.Wait4(-1,...)`
   * this allows for a more streamlined approach, single-pid init process, as well as improved tracking of other PIDs
