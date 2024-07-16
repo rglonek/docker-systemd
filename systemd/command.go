@@ -15,7 +15,7 @@ import (
 
 type cmd struct {
 	Poweroff       cmdPoweroff       `command:"poweroff" description:"shutdown the system"`
-	Enable         cmdEnable         `command:"enable" description:"enable services"`
+	Enable         cmdEnable         `command:"enable" description:"enable services" subcommands-optional:"true"`
 	Disable        cmdDisable        `command:"disable" description:"disable services"`
 	DaemonReload   cmdDaemonReload   `command:"daemon-reload" description:"reload unit files"`
 	Start          cmdStart          `command:"start" description:"start a service"`
@@ -33,7 +33,7 @@ type cmd struct {
 
 type cmdPoweroff struct{}
 type cmdEnable struct {
-	Now bool `log:"now" description:"Start services after enabling"`
+	Now bool `long:"now" description:"Start services after enabling"`
 }
 type cmdDisable struct{}
 type cmdDaemonReload struct{}
