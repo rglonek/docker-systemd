@@ -101,30 +101,38 @@ var Debug = false
 func Init() {
 	go func() {
 		for {
-			time.Sleep(time.Millisecond)
-			wait(0)
+			err := wait(0)
+			if err != nil {
+				time.Sleep(time.Second)
+			}
 		}
 	}()
 }
 
 // defer running this to the very end, it will run the final reap
 func FinalReap() {
-	for i := 0; i < 500; i++ {
-		wait(syscall.WNOWAIT)
+	for {
+		err := wait(syscall.WNOHANG)
+		if err != nil {
+			break
+		}
 	}
 }
 
-func wait(opts int) {
+func wait(opts int) error {
 	var ws syscall.WaitStatus
 	wpid, err := syscall.Wait4(-1, &ws, opts, nil)
 	if err != nil {
-		return
+		if Debug {
+			log.Printf("syscall.Wait4: opts:%d wpid:%d err:%s", opts, wpid, err)
+		}
+		return err
 	} else {
 		if Debug {
-			log.Printf("syscall.Wait4 wpid:%d exited:%t exitStatus:%d signaled:%t stopped:%t continued:%t coreDump:%t", wpid, ws.Exited(), ws.ExitStatus(), ws.Signaled(), ws.Stopped(), ws.Continued(), ws.CoreDump())
+			log.Printf("syscall.Wait4 opts:%d wpid:%d exited:%t exitStatus:%d signaled:%t stopped:%t continued:%t coreDump:%t", opts, wpid, ws.Exited(), ws.ExitStatus(), ws.Signaled(), ws.Stopped(), ws.Continued(), ws.CoreDump())
 		}
 		if ws.Stopped() || ws.Continued() {
-			return
+			return nil
 		}
 		waits.Lock()
 		defer waits.Unlock()
@@ -145,4 +153,5 @@ func wait(opts int) {
 			}
 		}
 	}
+	return nil
 }

@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## v0.3.2
+* improve `syscall.Wait4` call error handling in `procwait`
+
 ## v0.3.1
 * add `--now` option to `systemctl enable`
 
