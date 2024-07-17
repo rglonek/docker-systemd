@@ -40,11 +40,8 @@ clean:
 .PHONY: build
 build:
 	mkdir bin
-	cp forkpreload/fork_amd64.so systemd/fork.so
-	cp forkpreload/fakefork_amd64.so systemd/fakefork.so
+	cp forkpreload/*.so systemd/
 	env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/systemd-amd64
-	cp forkpreload/fork_arm64.so systemd/fork.so
-	cp forkpreload/fakefork_arm64.so systemd/fakefork.so
 	env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/systemd-arm64
 
 .PHONY: shrink

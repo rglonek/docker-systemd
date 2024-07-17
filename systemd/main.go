@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -118,6 +119,12 @@ func Main() {
 		}
 	}
 	os.MkdirAll(common.GetLogPath(), 0755)
+	forkfile := amdforkfile
+	fakeforkfile := amdfakeforkfile
+	if runtime.GOARCH == "arm64" {
+		forkfile = armforkfile
+		fakeforkfile = armfakeforkfile
+	}
 	if ldPreload {
 		log.Println("INIT: Creating pidtrack socket")
 		os.WriteFile("/usr/local/lib/fork.so", forkfile, 0755)
