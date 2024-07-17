@@ -1,6 +1,8 @@
 FROM golang:1.21 AS build
 WORKDIR /src
 COPY . /src/
+RUN cp forkpreload/fork_amd64.so systemd/fork.so
+RUN cp forkpreload/fakefork_amd64.so systemd/fakefork.so
 RUN env CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/sbin/init-docker-systemd .
 
 FROM ubuntu:22.04
