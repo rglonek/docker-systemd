@@ -1,0 +1,8 @@
+FROM golang:1.21 AS build
+WORKDIR /src
+COPY . /src/
+RUN go build -o /usr/sbin/init-docker-systemd .
+
+FROM ubuntu:22.04
+COPY --from=build /usr/sbin/init-docker-systemd /usr/sbin/init-docker-systemd
+ENTRYPOINT ["/usr/sbin/init-docker-systemd"]
