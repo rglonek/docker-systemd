@@ -1,0 +1,17 @@
+#!/bin/bash
+
+docker buildx create --name multiarch --use || exit 1
+
+T2=0
+if [ "$IMAGE_NAME" = "ubuntu:24.04" ]; then T2=1; fi
+if [ "$IMAGE_NAME" = "debian:12" ]; then T2=1; fi
+if [ "$IMAGE_NAME" = "rockylinux:9" ]; then T2=1; fi
+if [ "$IMAGE_NAME" = "centos:stream9" ]; then T2=1; fi
+
+if [ $T2 -gt 0 ]
+then
+    IFS=':'; arrIN=($IMAGE_NAME); unset IFS; TAG2=${arrIN[0]}
+    docker buildx build -t $IMAGE_NAME -t ${TAG2}:latest --platform linux/amd64,linux/arm64 --push . || exit 1
+else
+    docker buildx build -t $IMAGE_NAME --platform linux/amd64,linux/arm64 --push . || exit 1
+fi
