@@ -8,9 +8,25 @@ Note that only `.service` files are supported. Timer events as well as sockets a
 
 Support is given to multiple systemd service file locations, as well as multi-instance service files and basic dependency handling for dependent services.
 
-## Stability
+## Quickstart: getting started with prebuilt images
 
-Has been tested with a bunch of common services and works as expected for those. Raise an issue on github if something isn't working, or alternatively contribute. This will continue being version `0.x` until everything has been tested fully, at which point a major code cleanup and refactor will happen for version 1 release.
+Prebuild images are available from latest with just the binary entrypoint added.
+
+```
+docker run -itd robertglonek/ubuntu:24.04
+docker run -itd robertglonek/ubuntu:22.04
+docker run -itd robertglonek/ubuntu:20.04
+
+docker run -itd robertglonek/debian:12
+docker run -itd robertglonek/debian:11
+docker run -itd robertglonek/debian:10
+docker run -itd robertglonek/debian:9
+
+docker run -itd robertglonek/rockylinux:9
+docker run -itd robertglonek/rockylinux:8
+
+docker run -itd robertglonek/centos:stream9
+```
 
 ## TL;DR Quickstart please
 

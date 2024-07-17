@@ -1,5 +1,25 @@
 # Getting started
 
+## Getting started with prebuilt images
+
+Prebuild images are available from latest with just the binary entrypoint added.
+
+```
+docker run -itd robertglonek/ubuntu:24.04
+docker run -itd robertglonek/ubuntu:22.04
+docker run -itd robertglonek/ubuntu:20.04
+
+docker run -itd robertglonek/debian:12
+docker run -itd robertglonek/debian:11
+docker run -itd robertglonek/debian:10
+docker run -itd robertglonek/debian:9
+
+docker run -itd robertglonek/rockylinux:9
+docker run -itd robertglonek/rockylinux:8
+
+docker run -itd robertglonek/centos:stream9
+```
+
 ## Show me a demo
 
 Check out the [test/](/test) directory in this repo for a working basic demo. This installs and is capable of running: `aerospike`, `aerospike-prometheus-exporter`, `apache2`, `mariadb-server` and `postfix`. Some of these are already enabled by default upon installation. Just copy the `systemd-xxx` to `test/init` and go for it.
