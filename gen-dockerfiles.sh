@@ -16,7 +16,7 @@ targetName="${i/quay.io\/centos\/centos:stream/centos}"
 targetName="${targetName/:/}"
 targetName="Dockerfile-${targetName/./}"
 cat <<EOF > $targetName
-FROM golang:1.21 AS build
+FROM golang:1.22 AS build
 WORKDIR /src
 COPY . /src/
 RUN cp forkpreload/*.so systemd/
