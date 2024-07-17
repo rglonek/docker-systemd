@@ -2,6 +2,7 @@
 
 ## v0.3.2
 * improve `syscall.Wait4` call error handling in `procwait`
+* improve communication protocol between `systemd.command` and `systemctl` so that multiple messages can be sent and printed to user during the command execution process
 
 ## v0.3.1
 * add `--now` option to `systemctl enable`
