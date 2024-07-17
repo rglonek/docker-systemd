@@ -1,6 +1,7 @@
 package systemctl
 
 import (
+	"bytes"
 	"docker-systemd/common"
 	"encoding/binary"
 	"fmt"
@@ -17,8 +18,9 @@ for each slice:
 */
 
 /* receive buffer is:
-16-bit int: return value
-string: to print out
+string: to print out followed by 0x00 byte
+-- send 0x00 in response
+magic 5-byte signature and 16-bit int: return value
 */
 
 func Main(args []string) {
@@ -43,14 +45,30 @@ func Main(args []string) {
 		log.Fatal(err)
 	}
 	recvBuf := make([]byte, 65536)
-	if recvSize, err := conn.Read(recvBuf); err != nil {
-		log.Fatal(err)
-	} else if recvSize < 2 {
-		log.Fatal("receive error: data too small")
-	} else if recvSize == 2 {
-		os.Exit(int(binary.LittleEndian.Uint16(recvBuf[0:2])))
-	} else if recvSize > 2 {
-		fmt.Println(string(recvBuf[2:recvSize]))
-		os.Exit(int(binary.LittleEndian.Uint16(recvBuf[0:2])))
+
+	isEnd := false
+	for {
+		recvSize, err := conn.Read(recvBuf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !isEnd && bytes.HasSuffix(recvBuf[0:recvSize], []byte{0x00}) {
+			if recvSize > 1 {
+				fmt.Print(string(recvBuf[0 : recvSize-1]))
+			}
+			_, err = conn.Write([]byte{0x00})
+			if err != nil {
+				log.Fatalf("ERROR sending readiness for response code signal: %s", err)
+			}
+			isEnd = true
+			continue
+		}
+		if isEnd {
+			if recvSize >= 5 && recvSize <= 7 && bytes.Equal(recvBuf[0:5], common.SystemctlExitCodeMagic) {
+				os.Exit(int(binary.LittleEndian.Uint16(recvBuf[recvSize-2 : recvSize])))
+			}
+			log.Fatalf("Received extra bytes at end of message: %v", recvBuf[0:recvSize])
+		}
+		fmt.Print(string(recvBuf[0:recvSize]))
 	}
 }

@@ -70,6 +70,8 @@ func SocketPath() string {
 	return "/tmp/docker-systemd.sock"
 }
 
+var SystemctlExitCodeMagic = []byte{00, 0xFF, 0x55, 0xAA, 00}
+
 // enable: Created symlink /etc/systemd/system/multi-user.target.wants/aerospike.service → /lib/systemd/system/aerospike.service
 // disable: Removed /etc/systemd/system/multi-user.target.wants/aerospike.service
 // mask: Created symlink /etc/systemd/system/aerospike.service → /dev/null

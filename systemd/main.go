@@ -25,8 +25,9 @@ for each slice:
 */
 
 /* send buffer is:
-16-bit int: return value
-string: to print out
+string: to print out, followed by 0x00 byte
+- wait for 0x00 response
+7 bytes - magic 5-byte and 16-bit int: return value
 */
 
 func pidtrack() error {
@@ -188,13 +189,18 @@ func Main() {
 				args = append(args, string(buf[bufloc:bufloc+argn]))
 				bufloc += argn
 			}
-			retCode, retMessage := command(args)
-			sendBuf := []byte{}
-			sendBuf = binary.LittleEndian.AppendUint16(sendBuf, uint16(retCode))
-			sendBuf = append(sendBuf, []byte(retMessage)...)
-			_, err = conn.Write(sendBuf)
+			retCode := command(args, &NetConn{Conn: conn})
+			_, err = conn.Write([]byte{0x00})
 			if err != nil {
-				log.Printf("response error: %s", err)
+				log.Printf("error ending response message: %s", err)
+			}
+			_, err = conn.Read(buf)
+			if err != nil {
+				log.Printf("client did not respond with readiness to receive response code: %s", err)
+			}
+			_, err = conn.Write(binary.LittleEndian.AppendUint16(common.SystemctlExitCodeMagic, uint16(retCode)))
+			if err != nil {
+				log.Printf("response code send error: %s", err)
 			}
 		}(conn)
 	}

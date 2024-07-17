@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 
@@ -33,17 +35,32 @@ type cmd struct {
 
 type cmdPoweroff struct{}
 type cmdEnable struct {
-	Now bool `long:"now" description:"Start services after enabling"`
+	Now  bool `long:"now" description:"Start services after enabling"`
+	Conn *NetConn
 }
-type cmdDisable struct{}
+type cmdDisable struct {
+	Conn *NetConn
+}
 type cmdDaemonReload struct{}
-type cmdStart struct{}
-type cmdStop struct{}
-type cmdRestart struct{}
-type cmdReload struct{}
+type cmdStart struct {
+	Conn *NetConn
+}
+type cmdStop struct {
+	Conn *NetConn
+}
+type cmdRestart struct {
+	Conn *NetConn
+}
+type cmdReload struct {
+	Conn *NetConn
+}
 type cmdStatus struct{}
-type cmdMask struct{}
-type cmdUnmask struct{}
+type cmdMask struct {
+	Conn *NetConn
+}
+type cmdUnmask struct {
+	Conn *NetConn
+}
 type cmdShow struct{}
 type cmdList struct{}
 type cmdCreateInstance struct{}
@@ -154,21 +171,29 @@ func (c *cmdEnable) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Enabling %s ... ", daemon.Name())
 		err := daemon.Enable()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
 	if c.Now {
 		for _, daemon := range ds {
+			c.Conn.Printf("Starting %s ... ", daemon.Name())
 			err := daemon.Start()
 			if err != nil {
+				c.Conn.Println("FAIL")
 				return MakeResponse(daemon.Name()+": "+err.Error(), true)
+			} else {
+				c.Conn.Println("OK")
 			}
 		}
-		return MakeResponse("Services Enabled and Started", false)
+		return nil
 	}
-	return MakeResponse("Services Enabled", false)
+	return nil
 }
 
 func (c *cmdDisable) Execute(args []string) error {
@@ -177,12 +202,16 @@ func (c *cmdDisable) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Disabling %s ... ", daemon.Name())
 		err := daemon.Disable()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Disabled", false)
+	return nil
 }
 
 func (c *cmdDaemonReload) Execute(args []string) error {
@@ -219,12 +248,16 @@ func (c *cmdStart) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Starting %s ... ", daemon.Name())
 		err := daemon.Start()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Started", false)
+	return nil
 }
 
 func (c *cmdStop) Execute(args []string) error {
@@ -233,12 +266,16 @@ func (c *cmdStop) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Stopping %s ... ", daemon.Name())
 		err := daemon.Stop()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Stopped", false)
+	return nil
 }
 
 func (c *cmdRestart) Execute(args []string) error {
@@ -247,12 +284,16 @@ func (c *cmdRestart) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Restarting %s ... ", daemon.Name())
 		err := daemon.Restart()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Restarted", false)
+	return nil
 }
 
 func (c *cmdReload) Execute(args []string) error {
@@ -261,12 +302,16 @@ func (c *cmdReload) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Reloading %s ... ", daemon.Name())
 		err := daemon.Reload()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Reloaded", false)
+	return nil
 }
 
 func (c *cmdMask) Execute(args []string) error {
@@ -275,12 +320,16 @@ func (c *cmdMask) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Masking %s ... ", daemon.Name())
 		err := daemon.Mask()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Masked", false)
+	return nil
 }
 
 func (c *cmdUnmask) Execute(args []string) error {
@@ -289,12 +338,16 @@ func (c *cmdUnmask) Execute(args []string) error {
 		return MakeResponse(err.Error(), true)
 	}
 	for _, daemon := range ds {
+		c.Conn.Printf("Unmasking %s ... ", daemon.Name())
 		err := daemon.Unmask()
 		if err != nil {
+			c.Conn.Println("FAIL")
 			return MakeResponse(daemon.Name()+": "+err.Error(), true)
+		} else {
+			c.Conn.Println("OK")
 		}
 	}
-	return MakeResponse("Services Unmasked", false)
+	return nil
 }
 
 func (c *cmdStatus) Execute(args []string) error {
@@ -352,14 +405,15 @@ func (c *cmdList) Execute(args []string) error {
 	return MakeResponse(strings.Join(ds, "\n"), false)
 }
 
-func command(args []string) (retCode int, retMsg string) {
+func command(args []string, conn *NetConn) (retCode int) {
 	log.Printf("COMMAND: Received command %v", args)
-	c := new(cmd)
+	c := NewCmd(conn)
 	p := flags.NewParser(c, flags.HelpFlag|flags.PassDoubleDash)
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		var helpMsg bytes.Buffer
 		p.WriteHelp(&helpMsg)
-		return 0, helpMsg.String()
+		conn.Println(helpMsg.String())
+		return 0
 	}
 	_, err := p.ParseArgs(args)
 	if err != nil {
@@ -367,24 +421,64 @@ func command(args []string) (retCode int, retMsg string) {
 		case cmdResponse:
 			if msg.isError {
 				log.Printf("COMMAND: %v Error %s", args, msg.Error())
-				return 1, msg.Error()
+				conn.Println(msg.Error())
+				return 1
 			}
 			log.Printf("COMMAND: %v Success", args)
-			return 0, msg.message
+			conn.Println(msg.message)
+			return 0
 		case *flags.Error:
 			if msg.Type == flags.ErrUnknownCommand {
 				log.Printf("COMMAND: %v soft-error %s", args, msg.Error())
-				return 0, msg.Error()
+				conn.Println(msg.Error())
+				return 0
 			}
 		default:
 			if strings.HasPrefix(err.Error(), "Unknown command") {
 				log.Printf("COMMAND: %v soft-error %s", args, msg.Error())
-				return 0, msg.Error()
+				conn.Println(msg.Error())
+				return 0
 			}
 			log.Printf("COMMAND: %v ERROR %s", args, msg.Error())
-			return 1, msg.Error()
+			conn.Println(msg.Error())
+			return 1
 		}
 	}
-	log.Printf("COMMAND: %v no-return success", args)
-	return 0, "Success"
+	log.Printf("COMMAND: %v success", args)
+	return 0
+}
+
+type NetConn struct {
+	Conn net.Conn
+}
+
+func (c *NetConn) Print(s string) {
+	c.Conn.Write([]byte(s))
+}
+
+func (c *NetConn) Println(s string) {
+	c.Conn.Write(append([]byte(s), '\n'))
+}
+
+func (c *NetConn) Printf(s string, params ...any) {
+	c.Conn.Write([]byte(fmt.Sprintf(s, params...)))
+}
+
+func (c *NetConn) Printfln(s string, params ...any) {
+	c.Conn.Write([]byte(fmt.Sprintf(s+"\n", params...)))
+}
+
+func NewCmd(connection *NetConn) *cmd {
+	c := new(cmd)
+	value := reflect.Indirect(reflect.ValueOf(c))
+	for i := 0; i < value.NumField(); i++ {
+		if value.Type().Field(i).Type.Kind() == reflect.Struct {
+			_, ok := value.Type().Field(i).Type.FieldByName("Conn")
+			if ok {
+				conn := value.Field(i).FieldByName("Conn")
+				conn.Set(reflect.ValueOf(connection))
+			}
+		}
+	}
+	return c
 }
