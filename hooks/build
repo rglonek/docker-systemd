@@ -8,14 +8,14 @@ if [ "$IMAGE_NAME" = "debian:12" ]; then T2=1; fi
 if [ "$IMAGE_NAME" = "rockylinux:9" ]; then T2=1; fi
 if [ "$IMAGE_NAME" = "centos:stream9" ]; then T2=1; fi
 
+IFS=':'; arrIN=($IMAGE_NAME); unset IFS; TAG2=${arrIN[0]}; ORIG=${arrIN[1]}
 if [ $T2 -gt 0 ]
 then
-    IFS=':'; arrIN=($IMAGE_NAME); unset IFS; TAG2=${arrIN[0]}
     docker buildx build -f $DOCKERFILE_PATH -t $IMAGE_NAME -t ${TAG2}:latest --platform linux/amd64,linux/arm64 --push . || exit 1
-    docker buildx build -f $DOCKERFILE_PATH -t amd64-$IMAGE_NAME -t amd64-${TAG2}:latest --platform linux/amd64 --push . || exit 1
-    docker buildx build -f $DOCKERFILE_PATH -t arm64-$IMAGE_NAME -t arm64-${TAG2}:latest --platform linux/arm64 --push . || exit 1
+    docker buildx build -f $DOCKERFILE_PATH -t ${TAG2}-amd64:${ORIG} -t ${TAG2}-amd64:latest --platform linux/amd64 --push . || exit 1
+    docker buildx build -f $DOCKERFILE_PATH -t ${TAG2}-arm64:${ORIG} -t ${TAG2}-arm64:latest --platform linux/arm64 --push . || exit 1
 else
     docker buildx build -f $DOCKERFILE_PATH -t $IMAGE_NAME --platform linux/amd64,linux/arm64 --push . || exit 1
-    docker buildx build -f $DOCKERFILE_PATH -t amd64-$IMAGE_NAME --platform linux/amd64 --push . || exit 1
-    docker buildx build -f $DOCKERFILE_PATH -t arm64-$IMAGE_NAME --platform linux/arm64 --push . || exit 1
+    docker buildx build -f $DOCKERFILE_PATH -t ${TAG2}-amd64:${ORIG} --platform linux/amd64 --push . || exit 1
+    docker buildx build -f $DOCKERFILE_PATH -t ${TAG2}-arm64:${ORIG} --platform linux/arm64 --push . || exit 1
 fi

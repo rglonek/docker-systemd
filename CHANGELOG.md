@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.3.3
+* bump dependencies
+* automated docker build system
+
 ## v0.3.2
 * improve `syscall.Wait4` call error handling in `procwait`
 * improve communication protocol between `systemd.command` and `systemctl` so that multiple messages can be sent and printed to user during the command execution process
