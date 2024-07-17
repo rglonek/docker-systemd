@@ -3,6 +3,6 @@ WORKDIR /src
 COPY . /src/
 RUN env CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/sbin/init-docker-systemd .
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 COPY --from=build /usr/sbin/init-docker-systemd /usr/sbin/init-docker-systemd
 ENTRYPOINT ["/usr/sbin/init-docker-systemd"]
