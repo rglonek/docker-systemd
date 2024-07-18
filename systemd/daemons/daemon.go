@@ -493,7 +493,7 @@ func (d *daemon) start(isManual bool) error {
 		return fmt.Errorf("could not cleanup old run jobs: %s", err)
 	}
 	d.stateError = nil
-	denv := d.def.Env
+	denv := append(os.Environ(), d.def.Env...)
 	for _, ef := range d.def.EnvFile {
 		failOnNotFound := true
 		if strings.HasPrefix(ef, "-") {

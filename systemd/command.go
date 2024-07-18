@@ -16,21 +16,23 @@ import (
 )
 
 type cmd struct {
-	Poweroff       cmdPoweroff       `command:"poweroff" description:"shutdown the system"`
-	Enable         cmdEnable         `command:"enable" description:"enable services" subcommands-optional:"true"`
-	Disable        cmdDisable        `command:"disable" description:"disable services"`
-	DaemonReload   cmdDaemonReload   `command:"daemon-reload" description:"reload unit files"`
-	Start          cmdStart          `command:"start" description:"start a service"`
-	Stop           cmdStop           `command:"stop" description:"stop a service"`
-	Restart        cmdRestart        `command:"restart" description:"restart a service"`
-	Reload         cmdReload         `command:"reload" description:"reload a service (send SIGHUP)"`
-	Status         cmdStatus         `command:"status" description:"status of a service"`
-	Mask           cmdMask           `command:"mask" description:"mask a service"`
-	Unmask         cmdUnmask         `command:"unmask" description:"unmask a service"`
-	Show           cmdShow           `command:"show" description:"show details of a service"`
-	CreateInstance cmdCreateInstance `command:"create-instance" description:"create a new instance (for multi-instance services)"`
-	DeleteInstance cmdDeleteInstance `command:"delete-instance" description:"delete an instance (for multi-instance services)"`
-	List           cmdList           `command:"list" description:"list services"`
+	Poweroff         cmdPoweroff         `command:"poweroff" description:"shutdown the system"`
+	Enable           cmdEnable           `command:"enable" description:"enable services" subcommands-optional:"true"`
+	Disable          cmdDisable          `command:"disable" description:"disable services"`
+	DaemonReload     cmdDaemonReload     `command:"daemon-reload" description:"reload unit files"`
+	Start            cmdStart            `command:"start" description:"start a service"`
+	Stop             cmdStop             `command:"stop" description:"stop a service"`
+	Restart          cmdRestart          `command:"restart" description:"restart a service"`
+	Reload           cmdReload           `command:"reload" description:"reload a service (send SIGHUP)"`
+	Status           cmdStatus           `command:"status" description:"status of a service"`
+	Mask             cmdMask             `command:"mask" description:"mask a service"`
+	Unmask           cmdUnmask           `command:"unmask" description:"unmask a service"`
+	Show             cmdShow             `command:"show" description:"show details of a service"`
+	CreateInstance   cmdCreateInstance   `command:"create-instance" description:"create a new instance (for multi-instance services)"`
+	DeleteInstance   cmdDeleteInstance   `command:"delete-instance" description:"delete an instance (for multi-instance services)"`
+	SetEnvironment   cmdSetEnvironment   `command:"set-environment" description:"set an environment variable on systemd process"`
+	UnsetEnvironment cmdUnsetEnvironment `command:"unset-environment" description:"unset an environment variable on systemd process"`
+	List             cmdList             `command:"list" description:"list services"`
 }
 
 type cmdPoweroff struct{}
@@ -65,6 +67,8 @@ type cmdShow struct{}
 type cmdList struct{}
 type cmdCreateInstance struct{}
 type cmdDeleteInstance struct{}
+type cmdSetEnvironment struct{}
+type cmdUnsetEnvironment struct{}
 
 type cmdResponse struct {
 	message string
@@ -481,4 +485,24 @@ func NewCmd(connection *NetConn) *cmd {
 		}
 	}
 	return c
+}
+
+func (c *cmdSetEnvironment) Execute(args []string) error {
+	for _, arg := range args {
+		os.Unsetenv(arg)
+	}
+	return nil
+}
+
+func (c *cmdUnsetEnvironment) Execute(args []string) error {
+	for _, arg := range args {
+		if !strings.Contains(arg, "=") {
+			arg = arg + "="
+		}
+		kv := strings.Split(arg, "=")
+		k := kv[0]
+		v := strings.Join(kv[1:], "=")
+		os.Setenv(k, v)
+	}
+	return nil
 }

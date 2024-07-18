@@ -24,7 +24,7 @@ type opts struct {
 	Unit    string `short:"u" long:"unit" description:"unit name"`
 	Lines   int    `short:"n" long:"lines" description:"show max X last lines"`
 	Follow  bool   `short:"f" long:"follow" description:"follow log; implies lines"`
-	NoPager bool   `long:"no-pager" description:"do not page results; implied with follow"`
+	NoPager bool   `long:"no-pager" description:"do not page results; implied with follow" hidden:"true"`
 	Help    bool   `short:"h" long:"help" description:"display help"`
 }
 
@@ -39,6 +39,8 @@ func Main() {
 		parser.WriteHelp(os.Stderr)
 		os.Exit(1)
 	}
+	// TODO: fix pager, disabling for now
+	opt.NoPager = true
 	if opt.Unit == "" {
 		log.Fatal("ERR Unit name is required")
 	}
@@ -197,7 +199,7 @@ func getPagerCommand() (string, []string) {
 	}
 	l, e = exec.LookPath("more")
 	if e == nil && l != "" {
-		return "more", []string{"-R"}
+		return "more", []string{}
 	}
 	return "", nil
 }

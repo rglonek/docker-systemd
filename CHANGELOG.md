@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.4.1
+* daemons should also inherit `os.Environ()` of systemd process
+* support `set-environment` and `unset-environment` features of systemd/systemctl
+* disable journalctl pager; feature will be ignored; to page, simply pipe to `more` or `less`
+
 ## v0.4.0
 * redo the `systemd` daemon handler, using signals and states instead of long-lasting mutex locks to allow for better state flow and querying capability
 * add `version` systemctl command to print version
