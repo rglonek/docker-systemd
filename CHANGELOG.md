@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.4.0
+* redo the `systemd` daemon handler, using signals and states instead of long-lasting mutex locks to allow for better state flow and querying capability
+* add `version` systemctl command to print version
+
 ## v0.3.3
 * bump dependencies
 * automated docker build system

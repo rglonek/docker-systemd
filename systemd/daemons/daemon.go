@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"os/user"
@@ -382,15 +383,37 @@ func (d *daemon) Start() error {
 	return d.start(true)
 }
 
+func (d *daemon) startCheckAbortState() error {
+	d.Lock()
+	abortState := d.state == StateStopping
+	dName := d.name
+	d.Unlock()
+	if abortState {
+		return fmt.Errorf("START: %s aborted by stop signal", dName)
+	}
+	return nil
+}
+
 func (d *daemon) start(isManual bool) error {
 	if d == nil {
 		return nil
 	}
+
 	d.Lock()
-	defer d.Unlock()
+	if d.state == StateStarting {
+		d.Unlock()
+		log.Printf("START: %s Already starting", d.name)
+		return nil
+	}
+	if d.state == StateStopping {
+		d.Unlock()
+		log.Printf("START: %s Cannot start, in stopping state", d.name)
+		return nil
+	}
 	log.Printf("START: %s Starting", d.name)
 	defer log.Printf("START: %s Done", d.name)
 	if d.isMasked {
+		d.Unlock()
 		return errors.New("service is masked")
 	}
 	if d.def.LimitCpu != "" {
@@ -445,6 +468,7 @@ func (d *daemon) start(isManual bool) error {
 		d.isManual = true
 	}
 	if d.state == StateRunning {
+		d.Unlock()
 		return nil
 	}
 	if d.state != StateRestarting {
@@ -454,11 +478,18 @@ func (d *daemon) start(isManual bool) error {
 		d.def.RemainAfterExit = true
 	}
 	d.Unlock()
+	if err := d.startCheckAbortState(); err != nil {
+		return err
+	}
 	err := d.stop(false)
+	if nerr := d.startCheckAbortState(); nerr != nil {
+		return nerr
+	}
 	d.Lock()
 	if err != nil {
 		d.state = StateStopped
 		d.stateError = err
+		d.Unlock()
 		return fmt.Errorf("could not cleanup old run jobs: %s", err)
 	}
 	d.stateError = nil
@@ -472,6 +503,7 @@ func (d *daemon) start(isManual bool) error {
 		ct, err := os.ReadFile(ef)
 		if err != nil {
 			if failOnNotFound {
+				d.Unlock()
 				return fmt.Errorf("env file %s not found: %s", ef, err)
 			} else {
 				continue
@@ -483,6 +515,7 @@ func (d *daemon) start(isManual bool) error {
 	if d.def.User != "" {
 		u, err := user.Lookup(d.def.User)
 		if err != nil {
+			d.Unlock()
 			return fmt.Errorf("failed to find user %s: %s", d.def.User, err)
 		}
 		uid, _ = strconv.ParseInt(u.Uid, 10, 32)
@@ -491,12 +524,14 @@ func (d *daemon) start(isManual bool) error {
 	if d.def.Group != "" {
 		g, err := user.LookupGroup(d.def.Group)
 		if err != nil {
+			d.Unlock()
 			return fmt.Errorf("failed to find user %s: %s", d.def.User, err)
 		}
 		gid, _ = strconv.ParseInt(g.Gid, 10, 32)
 		if uid == 0 {
 			u, err := user.Current()
 			if err != nil {
+				d.Unlock()
 				return fmt.Errorf("failed to find user %s: %s", d.def.User, err)
 			}
 			uid, _ = strconv.ParseInt(u.Uid, 10, 32)
@@ -506,9 +541,16 @@ func (d *daemon) start(isManual bool) error {
 	if err != nil {
 		d.state = StateStopped
 		d.stateError = err
+		d.Unlock()
 		return fmt.Errorf("could not open log file: %s", err)
 	}
-	for _, line := range d.def.ExecCondition {
+	execCondition := make([]string, len(d.def.ExecCondition))
+	copy(execCondition, d.def.ExecCondition)
+	d.Unlock()
+	for _, line := range execCondition {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		cmd := exec.Command("/bin/bash", "-c", line)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = l
@@ -516,6 +558,8 @@ func (d *daemon) start(isManual bool) error {
 		cmd.Env = denv
 		pstate, err := procwait.Run(cmd)
 		if err != nil {
+			d.Lock()
+			defer d.Unlock()
 			d.state = StateStopped
 			d.stateError = nil
 			log.Printf("<%s> Condition %s not met", d.name, line)
@@ -523,6 +567,8 @@ func (d *daemon) start(isManual bool) error {
 			return nil
 		}
 		if pstate.ExitStatus() != 0 {
+			d.Lock()
+			defer d.Unlock()
 			d.state = StateStopped
 			d.stateError = nil
 			log.Printf("<%s> Condition %s not met (returned %d)", d.name, line, pstate.ExitStatus())
@@ -530,58 +576,113 @@ func (d *daemon) start(isManual bool) error {
 			return nil
 		}
 	}
-	for ii, i := range d.def.Requisite {
+	d.Lock()
+	requirement := maps.Clone(d.def.Requisite)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		if i.State() != StateRunning {
 			log.Printf("<%s> Dependency %s not running, aborting: %s", d.name, ii, err)
 			l.Close()
+			d.Lock()
+			defer d.Unlock()
+			d.state = StateStopped
 			d.stateError = fmt.Errorf("%s: %s", i.Name(), err)
 			d.runOnFailure(l)
 			return err
 		}
 	}
-	for ii, i := range d.def.Requires {
+	d.Lock()
+	requirement = maps.Clone(d.def.Requires)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		err := i.start(false)
 		if err != nil {
 			log.Printf("<%s> Dependency %s start failed, aborting: %s", d.name, ii, err)
 			l.Close()
+			d.Lock()
+			defer d.Unlock()
+			d.state = StateStopped
 			d.stateError = fmt.Errorf("%s: %s", i.Name(), err)
 			d.runOnFailure(l)
 			return err
 		}
 	}
-	for ii, i := range d.def.BindsTo {
+	d.Lock()
+	requirement = maps.Clone(d.def.BindsTo)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		err := i.start(false)
 		if err != nil {
 			log.Printf("<%s> Dependency %s start failed, aborting: %s", d.name, ii, err)
 			l.Close()
+			d.Lock()
+			defer d.Unlock()
+			d.state = StateStopped
 			d.stateError = fmt.Errorf("%s: %s", i.Name(), err)
 			d.runOnFailure(l)
 			return err
 		}
 	}
-	for ii, i := range d.def.Wants {
+	d.Lock()
+	requirement = maps.Clone(d.def.Wants)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		err := i.start(false)
 		if err != nil {
 			log.Printf("<%s> Dependency %s start failed: %s", d.name, ii, err)
 		}
 	}
-	for ii, i := range d.def.Upholds {
+	d.Lock()
+	requirement = maps.Clone(d.def.Upholds)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		err := i.start(false)
 		if err != nil {
 			log.Printf("<%s> Dependency %s start failed: %s", d.name, ii, err)
 		}
 	}
-	for ii, i := range d.def.Conflicts {
+	d.Lock()
+	requirement = maps.Clone(d.def.Conflicts)
+	d.Unlock()
+	for ii, i := range requirement {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		err := i.Stop()
 		if err != nil {
 			log.Printf("<%s> Dependency %s stop failed, aborting: %s", d.name, ii, err)
 			l.Close()
+			d.Lock()
+			defer d.Unlock()
+			d.state = StateStopped
 			d.stateError = fmt.Errorf("%s: %s", i.Name(), err)
 			d.runOnFailure(l)
 			return err
 		}
 	}
-	for _, line := range d.def.ExecStartPre {
+	d.Lock()
+	execCondition = make([]string, len(d.def.ExecStartPre))
+	copy(execCondition, d.def.ExecStartPre)
+	d.Unlock()
+	for _, line := range execCondition {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		failOnErr := true
 		if strings.HasPrefix(line, "-") {
 			failOnErr = false
@@ -596,9 +697,10 @@ func (d *daemon) start(isManual bool) error {
 		if err != nil {
 			log.Printf("<%s> Failed: %s: %s", d.name, line, err)
 			if failOnErr {
-				d.Unlock()
 				d.Stop()
 				d.Lock()
+				defer d.Unlock()
+				d.state = StateStopped
 				d.stateError = fmt.Errorf("<%s> Failed StartPre: %s: %s", d.name, line, err)
 				l.Close()
 				d.runOnFailure(l)
@@ -606,8 +708,15 @@ func (d *daemon) start(isManual bool) error {
 			}
 		}
 	}
+	d.Lock()
+	execCondition = make([]string, len(d.def.ExecStart))
+	copy(execCondition, d.def.ExecStart)
+	d.Unlock()
 	cmds := []*exec.Cmd{}
-	for _, line := range d.def.ExecStart {
+	for _, line := range execCondition {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		failOnErr := true
 		if strings.HasPrefix(line, "-") {
 			failOnErr = false
@@ -629,9 +738,10 @@ func (d *daemon) start(isManual bool) error {
 		if err != nil {
 			log.Printf("<%s> Failed: %s: %s", d.name, line, err)
 			if failOnErr {
-				d.Unlock()
 				d.Stop()
 				d.Lock()
+				defer d.Unlock()
+				d.state = StateStopped
 				d.stateError = fmt.Errorf("<%s> Failed Start: %s: %s", d.name, line, err)
 				l.Close()
 				d.runOnFailure(l)
@@ -640,7 +750,14 @@ func (d *daemon) start(isManual bool) error {
 		}
 		cmds = append(cmds, cmd)
 	}
-	for _, line := range d.def.ExecStartPost {
+	d.Lock()
+	execCondition = make([]string, len(d.def.ExecStartPost))
+	copy(execCondition, d.def.ExecStartPost)
+	d.Unlock()
+	for _, line := range execCondition {
+		if err := d.startCheckAbortState(); err != nil {
+			return err
+		}
 		failOnErr := true
 		if strings.HasPrefix(line, "-") {
 			failOnErr = false
@@ -655,15 +772,21 @@ func (d *daemon) start(isManual bool) error {
 		if err != nil {
 			log.Printf("<%s> Failed: %s: %s", d.name, line, err)
 			if failOnErr {
-				d.Unlock()
 				d.Stop()
 				d.Lock()
+				defer d.Unlock()
+				d.state = StateStopped
 				d.stateError = fmt.Errorf("<%s> Failed StartPost: %s: %s", d.name, line, err)
 				l.Close()
 				d.runOnFailure(l)
 				return err
 			}
 		}
+	}
+	d.Lock()
+	defer d.Unlock()
+	if d.state == StateStopping {
+		return errors.New("aborting, state changed to stopping")
 	}
 	d.state = StateRunning
 	d.stateError = nil
@@ -685,79 +808,100 @@ func (d *daemon) stop(printStopping bool) error {
 		return nil
 	}
 	d.Lock()
-	defer d.Unlock()
 	if printStopping {
 		log.Printf("STOP: %s Stopping", d.name)
 		defer log.Printf("STOP: %s Done", d.name)
 	}
 	if d.isMasked {
+		defer d.Unlock()
 		return errors.New("service is masked")
 	}
-	if d.state != StateRestarting {
+	if d.state != StateRestarting || printStopping {
 		d.state = StateStopping
 	}
 	l, err := NewLogger(d.name)
 	if err != nil {
+		defer d.Unlock()
 		d.stateError = err
 		return fmt.Errorf("could not open log file: %s", err)
 	}
-	for _, line := range d.def.ExecStopPre {
+	cmdLine := make([]string, len(d.def.ExecStopPre))
+	copy(cmdLine, d.def.ExecStopPre)
+	d.Unlock()
+	for _, line := range cmdLine {
 		cmd := exec.Command("/bin/bash", "-c", line)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = l
 		cmd.Stderr = l
 		_, err := procwait.Run(cmd)
 		if err != nil {
+			d.Lock()
 			d.stateError = fmt.Errorf("<%s> Failed StopPre: %s: %s", d.name, line, err)
 			log.Printf("<%s> Failed to run StopPre action (%s): %s", d.name, line, err)
+			d.Unlock()
 		}
 	}
-	for _, line := range d.def.ExecStop {
+	d.Lock()
+	cmdLine = make([]string, len(d.def.ExecStop))
+	copy(cmdLine, d.def.ExecStop)
+	workDir := d.def.WorkingDirectory
+	d.Unlock()
+	for _, line := range cmdLine {
 		cmd := exec.Command("/bin/bash", "-c", line)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = l
 		cmd.Stderr = l
-		if d.def.WorkingDirectory != "" {
-			cmd.Dir = d.def.WorkingDirectory
+		if workDir != "" {
+			cmd.Dir = workDir
 		}
 		_, err := procwait.Run(cmd)
 		if err != nil {
+			d.Lock()
 			d.stateError = fmt.Errorf("<%s> Failed Stop: %s: %s", d.name, line, err)
 			log.Printf("<%s> Failed to run Stop action (%s): %s", d.name, line, err)
+			d.Unlock()
 		}
 	}
-	for _, line := range d.def.ExecStopPost {
-		cmd := exec.Command("/bin/bash", "-c", line)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = l
-		cmd.Stderr = l
-		_, err := procwait.Run(cmd)
-		if err != nil {
-			d.stateError = fmt.Errorf("<%s> Failed StopPost: %s: %s", d.name, line, err)
-			log.Printf("<%s> Failed to run StopPost action (%s): %s", d.name, line, err)
-		}
-	}
+	d.Lock()
 	for _, cmd := range d.cmds {
 		if cmd.Process != nil {
 			log.Printf("Sending SIGTERM to %d", cmd.Process.Pid)
 			syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
 		}
 	}
-	exited := true
+	cmdLine = make([]string, len(d.def.ExecStopPost))
+	copy(cmdLine, d.def.ExecStopPost)
 	tout := 5 * time.Second
 	if d.def.StopTimeout != 0 {
 		tout = d.def.StopTimeout
 	}
+	d.Unlock()
+	for _, line := range cmdLine {
+		cmd := exec.Command("/bin/bash", "-c", line)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = l
+		cmd.Stderr = l
+		_, err := procwait.Run(cmd)
+		if err != nil {
+			d.Lock()
+			d.stateError = fmt.Errorf("<%s> Failed StopPost: %s: %s", d.name, line, err)
+			log.Printf("<%s> Failed to run StopPost action (%s): %s", d.name, line, err)
+			d.Unlock()
+		}
+	}
+	exited := true
 	waitStop := time.Now()
 	for {
 		exited = true
 		time.Sleep(10 * time.Millisecond)
+		d.Lock()
 		for _, cmd := range d.cmds {
 			if procwait.Is(cmd.Process.Pid) {
 				exited = false
 				break
 			}
 		}
+		d.Unlock()
 		if exited {
 			break
 		}
@@ -765,6 +909,8 @@ func (d *daemon) stop(printStopping bool) error {
 			break
 		}
 	}
+	d.Lock()
+	defer d.Unlock()
 	if !exited {
 		for _, cmd := range d.cmds {
 			if cmd.Process != nil {
@@ -783,11 +929,23 @@ func (d *daemon) Restart() error {
 		d.Unlock()
 		return errors.New("service is masked")
 	}
+	if d.state == StateRestarting || d.state == StateStopping || d.state == StateStarting {
+		log.Printf("RESTART %s: ERROR wrong state", d.name)
+		defer d.Unlock()
+		return fmt.Errorf("service %s is in a state from which restart cannot run", d.name)
+	}
 	d.state = StateRestarting
 	d.Unlock()
 	err := d.Stop()
 	if err != nil {
 		return err
+	}
+	d.Lock()
+	abortState := d.state == StateStopping
+	dName := d.name
+	d.Unlock()
+	if abortState {
+		return fmt.Errorf("START: %s aborted by stop signal", dName)
 	}
 	return d.Start()
 }
@@ -798,10 +956,16 @@ func (d *daemon) Reload() error {
 		d.Unlock()
 		return errors.New("service is masked")
 	}
-	defer d.Unlock()
-	if d.def.ExecReload != "" {
+	if d.state != StateRunning {
+		log.Printf("RELOAD %s: ERROR wrong state", d.name)
+		defer d.Unlock()
+		return fmt.Errorf("service %s is in a state from which restart cannot run", d.name)
+	}
+	execReload := d.def.ExecReload
+	d.Unlock()
+	if execReload != "" {
 		var buf bytes.Buffer
-		cmd := exec.Command("/bin/bash", "-c", d.def.ExecReload)
+		cmd := exec.Command("/bin/bash", "-c", execReload)
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf
 		_, err := procwait.Run(cmd)
@@ -810,6 +974,8 @@ func (d *daemon) Reload() error {
 			return fmt.Errorf("failed reload: %s: %s", err, string(out))
 		}
 	} else {
+		d.Lock()
+		defer d.Unlock()
 		for _, cmd := range d.cmds {
 			syscall.Kill(cmd.Process.Pid, syscall.SIGHUP)
 		}

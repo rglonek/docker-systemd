@@ -5,6 +5,7 @@ import (
 	"docker-systemd/journalctl"
 	"docker-systemd/systemctl"
 	"docker-systemd/systemd"
+	"fmt"
 	"log"
 	"os"
 	"path"
@@ -12,8 +13,13 @@ import (
 	"strings"
 	"time"
 
+	_ "embed"
+
 	"github.com/bestmethod/inslice"
 )
+
+//go:embed VERSION
+var version string
 
 func main() {
 	_, name := path.Split(os.Args[0])
@@ -24,6 +30,10 @@ func main() {
 	case "journalctl":
 		journalctl.Main()
 	case "systemctl":
+		if len(os.Args) == 2 && os.Args[1] == "version" {
+			fmt.Println(strings.Trim(version, "\r\n\t "))
+			return
+		}
 		systemctl.Main(os.Args)
 	case "poweroff":
 		systemctl.Main([]string{os.Args[0], "poweroff"})

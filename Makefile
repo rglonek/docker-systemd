@@ -53,7 +53,7 @@ shrink:
 test:
 	cp bin/systemd-amd64 test/init
 	cd test && docker build -t init:test .
-	docker run -itd --name bob init:test --log-to-stderr --debug-reaper
+	docker run -itd --name bob init:test --debug-reaper
 	echo "docker exec -it bob bash"
 	docker logs -f bob
 
