@@ -14,7 +14,7 @@ jobs:
         runs-on: ubuntu-22.04
         steps:
             - name: "Git checkout"
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: "Install Dependencies"
               run: |
                 sudo apt update && sudo apt -y install gnupg gzip upx wget make apt-utils sudo dpkg-dev alien createrepo-c
@@ -61,11 +61,11 @@ jobs:
                 FULLCOMMIT=$(git rev-parse HEAD)
                 gh release create -R github.com/rglonek/docker-systemd --notes-file ../CHANGELOG.md --target ${FULLCOMMIT} --title "v${TAG} - ${COMMIT}" ${TAG} systemd-amd64 systemd-arm64 ../repo/ubuntu/*deb ../repo/rh/Packages/*rpm
             - name: Setup Pages
-              uses: actions/configure-pages@v3
+              uses: actions/configure-pages@v5
             - name: Upload artifact
-              uses: actions/upload-pages-artifact@v2
+              uses: actions/upload-pages-artifact@v3
               with:
                 path: './repo'
             - name: Deploy to GitHub Pages
               id: deployment
-              uses: actions/deploy-pages@v2
+              uses: actions/deploy-pages@v4
