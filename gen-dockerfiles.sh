@@ -5,7 +5,6 @@ sources=(
     debian:12
     debian:11
     debian:10
-    debian:9
     rockylinux:9
     rockylinux:8
     quay.io/centos/centos:stream9

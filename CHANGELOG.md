@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.4.2
+* add error handling to `LD_PRELOAD` libraries
+* fix `arm64` versions of `LD_PRELOAD` libraries
+
 ## v0.4.1
 * daemons should also inherit `os.Environ()` of systemd process
 * support `set-environment` and `unset-environment` features of systemd/systemctl
