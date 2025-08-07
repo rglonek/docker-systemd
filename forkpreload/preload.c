@@ -23,7 +23,8 @@ pid_t fork(void) {
         real_fork = dlsym(RTLD_NEXT, "fork");
         if (!real_fork) {
             fprintf(stderr, "LD_PRELOAD: failed to resolve fork(): %s\n", dlerror());
-            exit(1);
+            errno = ENOSYS;
+            return -1;
         };
     };
     pid_t child = real_fork();
@@ -39,7 +40,8 @@ int execve(const char *pathname, char *const argv[], char *const envp[]) {
         real_execve = dlsym(RTLD_NEXT, "execve");
         if (!real_execve) {
             fprintf(stderr, "LD_PRELOAD: failed to resolve execve(): %s\n", dlerror());
-            exit(1);
+            errno = ENOSYS;
+            return -1;
         }
     };
     return real_execve(pathname, argv, envp);
@@ -86,7 +88,7 @@ void __docker_systemd_log_relationship_to_socket(pid_t *infant, char *name) {
     pid_t parent = getppid();
     pid_t child = getpid();
     char relations[36];
-    if (infant == NULL) {
+    if (infant) {
         snprintf(relations, sizeof(relations), "%jd:%jd:%jd", (intmax_t)parent, (intmax_t)child, (intmax_t)*infant);
     } else {
         snprintf(relations, sizeof(relations), "%jd:%jd", (intmax_t)parent, (intmax_t)child);
