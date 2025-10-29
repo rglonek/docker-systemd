@@ -19,11 +19,13 @@ func shutdown(socket net.Listener) {
 	log.Println("SHUTDOWN: Stopping services")
 	err := d.StopAll()
 	if err != nil {
-		log.Printf("SHUTDOWN: Error, unclean exit: %s", err)
+		log.Printf("SHUTDOWN: Error, unclean exit: %s, reaping processes", err)
 		procwait.FinalReap()
+		log.Println("SHUTDOWN: Reaped processes, exiting with error")
 		os.Exit(1)
 	}
-	log.Println("SHUTDOWN: Complete")
+	log.Println("SHUTDOWN: Reaping processes")
 	procwait.FinalReap()
+	log.Println("SHUTDOWN: Complete")
 	os.Exit(0)
 }
