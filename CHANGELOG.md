@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.4.5
+* add `dockerbuild.sh` script to build `LD_PRELOAD` libraries for different architectures
+* build against older supported versions of `glibc`
+
 ## v0.4.2
 * add error handling to `LD_PRELOAD` libraries
 * fix `arm64` versions of `LD_PRELOAD` libraries
