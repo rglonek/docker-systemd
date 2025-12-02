@@ -111,28 +111,57 @@ func Init() {
 
 // defer running this to the very end, it will run the final reap
 func FinalReap() {
+	consecutiveNoProcess := 0
+	maxConsecutiveNoProcess := 3
+	maxDuration := 10 * time.Second
+	startTime := time.Now()
 	for {
-		err := wait(syscall.WNOHANG)
+		// Safety timeout: if we've been reaping for too long, exit
+		if time.Since(startTime) > maxDuration {
+			if Debug {
+				log.Printf("FinalReap: timeout reached, exiting")
+			}
+			break
+		}
+		wpid, err := waitWithPid(syscall.WNOHANG)
 		if err != nil {
 			break
+		}
+		if wpid == 0 {
+			// No child process was available to wait for
+			consecutiveNoProcess++
+			if consecutiveNoProcess >= maxConsecutiveNoProcess {
+				// No processes reaped in the last few iterations, assume we're done
+				break
+			}
+			// Small sleep to avoid busy-waiting
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			// A process was reaped, reset the counter
+			consecutiveNoProcess = 0
 		}
 	}
 }
 
 func wait(opts int) error {
+	_, err := waitWithPid(opts)
+	return err
+}
+
+func waitWithPid(opts int) (int, error) {
 	var ws syscall.WaitStatus
 	wpid, err := syscall.Wait4(-1, &ws, opts, nil)
 	if err != nil {
 		if Debug {
 			log.Printf("syscall.Wait4: opts:%d wpid:%d err:%s", opts, wpid, err)
 		}
-		return err
+		return wpid, err
 	} else {
 		if Debug {
 			log.Printf("syscall.Wait4 opts:%d wpid:%d exited:%t exitStatus:%d signaled:%t stopped:%t continued:%t coreDump:%t", opts, wpid, ws.Exited(), ws.ExitStatus(), ws.Signaled(), ws.Stopped(), ws.Continued(), ws.CoreDump())
 		}
 		if ws.Stopped() || ws.Continued() {
-			return nil
+			return wpid, nil
 		}
 		waits.Lock()
 		defer waits.Unlock()
@@ -153,5 +182,5 @@ func wait(opts int) error {
 			}
 		}
 	}
-	return nil
+	return wpid, nil
 }

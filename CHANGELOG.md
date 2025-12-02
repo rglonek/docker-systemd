@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.5.0
+* add timeout handling and `wpid==0` handling to `procwait` in `FinalReap`
+* add `isShuttingDown` method to `daemon` to check if the system is shutting down to prevent starting new services during shutdown
+
 ## v0.4.5
 * add `dockerbuild.sh` script to build `LD_PRELOAD` libraries for different architectures
 * build against older supported versions of `glibc`

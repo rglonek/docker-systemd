@@ -25,6 +25,7 @@ import (
 
 type daemon struct {
 	sync.RWMutex
+	parent     *daemons
 	state      DaemonState
 	stateError error
 	name       string
@@ -103,6 +104,13 @@ type daemondef struct {
 
 func (d *daemon) Name() string {
 	return d.name
+}
+
+func (d *daemon) isShuttingDown() bool {
+	if d.parent == nil {
+		return false
+	}
+	return d.parent.IsShuttingDown()
 }
 
 func (d *daemon) handleStopDeps() {
@@ -284,6 +292,10 @@ func (d *daemon) monitorCmds(l *Logger) {
 	case "always":
 		d.state = StateRestarting
 		time.Sleep(d.def.RestartSleep)
+		// Check if shutdown started during sleep
+		if d.isShuttingDown() || d.state == StateStopped {
+			return
+		}
 		d.stateError = nil
 		for _, aa := range ans {
 			if aa != nil && aa.ExitStatus() != 0 {
@@ -309,7 +321,8 @@ func (d *daemon) monitorCmds(l *Logger) {
 			log.Printf("Will restart %s in %v", d.name, d.def.RestartSleep)
 			d.state = StateRestarting
 			time.Sleep(d.def.RestartSleep)
-			if d.state == StateStopped {
+			// Check if shutdown started during sleep
+			if d.isShuttingDown() || d.state == StateStopped {
 				return
 			}
 			log.Printf("Restarting %s", d.name)
@@ -333,7 +346,8 @@ func (d *daemon) monitorCmds(l *Logger) {
 		if d.stateError == nil && !d.def.RemainAfterExit {
 			d.state = StateRestarting
 			time.Sleep(d.def.RestartSleep)
-			if d.state == StateStopped {
+			// Check if shutdown started during sleep
+			if d.isShuttingDown() || d.state == StateStopped {
 				return
 			}
 			err := d.start(d.isManual)
@@ -384,6 +398,9 @@ func (d *daemon) Start() error {
 }
 
 func (d *daemon) startCheckAbortState() error {
+	if d.isShuttingDown() {
+		return fmt.Errorf("START: %s aborted by shutdown", d.name)
+	}
 	d.Lock()
 	abortState := d.state == StateStopping
 	dName := d.name
@@ -397,6 +414,11 @@ func (d *daemon) startCheckAbortState() error {
 func (d *daemon) start(isManual bool) error {
 	if d == nil {
 		return nil
+	}
+
+	// Check if shutdown is in progress before starting
+	if d.isShuttingDown() {
+		return fmt.Errorf("START: %s aborted, system is shutting down", d.name)
 	}
 
 	d.Lock()

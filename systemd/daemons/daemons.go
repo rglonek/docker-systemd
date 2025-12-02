@@ -8,13 +8,20 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bestmethod/inslice"
 )
 
 type daemons struct {
-	list map[string]*daemon
+	list     map[string]*daemon
+	shutdown atomic.Bool
 	sync.RWMutex
+}
+
+// IsShuttingDown returns true if the system is currently shutting down
+func (ds *daemons) IsShuttingDown() bool {
+	return ds.shutdown.Load()
 }
 
 func (ds *daemons) List() []string {
@@ -64,6 +71,7 @@ func (ds *daemons) LoadAndStart() error {
 }
 
 func (ds *daemons) StopAll() error {
+	ds.shutdown.Store(true) // Set shutdown flag FIRST to prevent new restarts
 	ds.RLock()
 	for _, item := range ds.list {
 		state := item.State()
@@ -110,13 +118,15 @@ func (ds *daemons) Reload() error {
 			}
 			fn = strings.TrimSuffix(fn, ".service")
 			d := &daemon{
-				name:  fn,
-				paths: []string{fpath},
-				state: StateStopped,
+				name:   fn,
+				paths:  []string{fpath},
+				state:  StateStopped,
+				parent: ds,
 			}
 			if _, ok := ds.list[fn]; ok {
 				d = ds.list[fn]
 				d.Lock()
+				d.parent = ds // Ensure parent is set for existing daemons
 				if !inslice.HasString(d.paths, fpath) {
 					d.paths = append(d.paths, fpath)
 				}

@@ -17,6 +17,7 @@ func shutdown(socket net.Listener) {
 	socket.Close()
 	os.Remove(common.SocketPath())
 	log.Println("SHUTDOWN: Stopping services")
+	// StopAll() will set the shutdown flag internally
 	err := d.StopAll()
 	if err != nil {
 		log.Printf("SHUTDOWN: Error, unclean exit: %s, reaping processes", err)
