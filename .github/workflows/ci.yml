@@ -1,0 +1,157 @@
+name: CI
+
+# The test pipeline of designs/docs/next/11-testing.md §7. L1-L4 run on every
+# push and pull request; nothing in it depends on a developer's local docker
+# invocation.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Pinned by go.mod's toolchain directive rather than downloaded
+          # implicitly (defect F11).
+          go-version-file: go.mod
+          check-latest: false
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        run: |
+          go vet ./...
+          go vet -tags=proc ./...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: |
+          env CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags="-s -w" -o bin/systemd-${{ matrix.goarch }} ./cmd/docker-systemd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: systemd-${{ matrix.goarch }}
+          path: bin/systemd-${{ matrix.goarch }}
+
+  l1:
+    name: L1 unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The race detector is mandatory: the A9/F3 defect class is precisely
+      # what it catches.
+      - run: go test -race ./...
+
+  l1-fuzz:
+    name: L1 fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          go test -run=XXX -fuzz=FuzzLex -fuzztime=60s ./internal/unitfile/
+          go test -run=XXX -fuzz=FuzzTokenize -fuzztime=60s ./internal/unitfile/
+          go test -run=XXX -fuzz=FuzzParseDuration -fuzztime=60s ./internal/unitfile/
+          go test -run=XXX -fuzz=FuzzReadFrame -fuzztime=60s ./internal/proto/
+          go test -run=XXX -fuzz=FuzzDecodeRecord -fuzztime=60s ./internal/journal/
+
+  l2:
+    name: L2 process tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # These need a real Linux kernel: they run real daemonising services and
+      # assert that the subreaper backend tracks and stops them.
+      - run: sudo -E env "PATH=$PATH" go test -race -tags=proc -timeout 600s ./...
+
+  l3-l4:
+    name: L3/L4 conformance
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu2404
+          - ubuntu2204
+          - ubuntu2004
+          - debian12
+          - debian11
+          - debian10
+          - rockylinux9
+          - rockylinux8
+          - centos9
+          - alpine3
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the image
+        run: docker build -f Dockerfile-${{ matrix.image }} -t docker-systemd-test:${{ matrix.image }} .
+      - name: run the conformance suite
+        run: |
+          chmod +x test/conformance/run.sh
+          set=default
+          case "${{ matrix.image }}" in
+            alpine3) set=none ;;   # expected-degraded: must at least boot
+            centos9|rockylinux*) set=minimal ;;
+          esac
+          test/conformance/run.sh docker-systemd-test:${{ matrix.image }} "$set"
+
+  l3-arm64:
+    name: L3 conformance (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - name: build and boot on arm64
+        run: |
+          docker build --platform linux/arm64 -f Dockerfile-ubuntu2404 \
+            -t docker-systemd-test:arm64 .
+          chmod +x test/conformance/run.sh
+          test/conformance/run.sh docker-systemd-test:arm64 none
+
+  no-preload:
+    name: LD_PRELOAD is gone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Phase 9 acceptance criterion: `git grep -i ld_preload` returns only
+      # documentation.
+      - run: |
+          hits=$(git grep -il ld_preload -- . ':!designs/**' ':!CHANGELOG.md' ':!README.md' || true)
+          if [ -n "$hits" ]; then
+            echo "LD_PRELOAD is still referenced outside the design docs:"; echo "$hits"; exit 1
+          fi
+          if git ls-files | grep -E '\.so$'; then
+            echo "committed shared objects found"; exit 1
+          fi

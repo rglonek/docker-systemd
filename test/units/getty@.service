@@ -1,0 +1,21 @@
+[Unit]
+Description=Getty on %I
+Documentation=man:agetty(8) man:systemd-getty-generator(8)
+After=systemd-user-sessions.service plymouth-quit-wait.service getty-pre.target
+ConditionPathExists=/dev/tty0
+
+[Service]
+ExecStart=-/sbin/agetty -o '-p -- \\u' --noclear - $TERM
+Type=idle
+Restart=always
+RestartSec=0
+UtmpIdentifier=%I
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+[Install]
+WantedBy=getty.target
+DefaultInstance=tty1

@@ -1,6 +1,15 @@
 .NOTPARALLEL:
 
 ver:=$(shell cat VERSION)
+commit:=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS:=-s -w -X main.version=$(ver)
+
+# The conformance matrix of designs/docs/next/11-testing.md §4. alpine:3 is the
+# expected-degraded case: it has no glibc, so the preload-based tracking this
+# project used up to 0.5.x could not handle it at all.
+IMAGES:=ubuntu2404 ubuntu2204 ubuntu2004 debian12 debian11 debian10 \
+        rockylinux9 rockylinux8 centos9 alpine3
+
 define _amddebscript
 ver=$(cat VERSION)
 cat <<EOF > bin/deb/DEBIAN/control
@@ -31,47 +40,67 @@ endef
 export armdebscript = $(value _armdebscript)
 
 .PHONY: cleanbuild
-cleanbuild: clean build shrink
+cleanbuild: clean build
 
 .PHONY: clean
 clean:
 	rm -rf ./bin
 
+# CGO_ENABLED=0 produces a genuinely static binary with no libc dependency, so
+# one file runs unchanged on glibc and musl images (10 §2). There is
+# deliberately no UPX step: every supervisor is a re-exec of this image and
+# would decompress its own private copy into anonymous memory (F10).
 .PHONY: build
 build:
-	mkdir bin
-	cp forkpreload/*.so systemd/
-	env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/systemd-amd64
-	env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/systemd-arm64
+	mkdir -p bin
+	env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/systemd-amd64 ./cmd/docker-systemd
+	env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/systemd-arm64 ./cmd/docker-systemd
 
-.PHONY: shrink
-shrink:
-	cd bin && upx systemd-amd64
-	cd bin && upx systemd-arm64
+.PHONY: lint
+lint:
+	gofmt -l . | tee /dev/stderr | (! read)
+	go vet ./...
+	go vet -tags=proc ./...
 
+# L1: pure unit tests. The race detector is mandatory — the defect class it
+# catches (A9, F3) is exactly what the old implementation shipped.
 .PHONY: test
 test:
-	cp bin/systemd-amd64 test/init
-	cd test && docker build -t init:test .
-	docker run -itd --name bob init:test --debug-reaper
-	echo "docker exec -it bob bash"
-	docker logs -f bob
+	go test -race ./...
 
-.PHONY: stoptest
-stoptest:
-	docker stop -t 1 bob
-	docker rm bob
+# L1 fuzzing: the unit-file parser, the command lexer, the duration parser and
+# the protocol framer all take untrusted-ish input.
+.PHONY: fuzz
+fuzz:
+	go test -run=XXX -fuzz=FuzzLex        -fuzztime=60s ./internal/unitfile/
+	go test -run=XXX -fuzz=FuzzTokenize   -fuzztime=60s ./internal/unitfile/
+	go test -run=XXX -fuzz=FuzzParseDuration -fuzztime=60s ./internal/unitfile/
+	go test -run=XXX -fuzz=FuzzReadFrame  -fuzztime=60s ./internal/proto/
+	go test -run=XXX -fuzz=FuzzDecodeRecord -fuzztime=60s ./internal/journal/
 
-.PHONY: buildtest
-buildtest: cleanbuild test
+# L2: process-level tests against real daemonising services. Needs a real
+# Linux kernel, not a mock.
+.PHONY: test-proc
+test-proc:
+	go test -race -tags=proc -timeout 600s ./...
 
-.PHONY: updatetest
-updatetest:
-	docker stop -t 1 bob || echo
-	make cleanbuild
-	docker cp bin/systemd-amd64 bob:/sbin/init
-	docker start bob
-	docker logs -f bob
+# L3/L4: the conformance matrix, one container per base image.
+.PHONY: conformance
+conformance:
+	@set -e; for img in $(IMAGES); do \
+		echo "== building $$img =="; \
+		docker build -q -f Dockerfile-$$img -t docker-systemd-test:$$img . ; \
+		test/conformance/run.sh docker-systemd-test:$$img ; \
+	done
+
+.PHONY: conformance-quick
+conformance-quick:
+	docker build -q -f Dockerfile-ubuntu2404 -t docker-systemd-test:ubuntu2404 .
+	test/conformance/run.sh docker-systemd-test:ubuntu2404 minimal
+
+.PHONY: dockerfiles
+dockerfiles:
+	bash gen-dockerfiles.sh
 
 .PHONY: pkg-deb-amd64
 pkg-deb-amd64:
@@ -107,8 +136,3 @@ pkg-deb: pkg-deb-amd64 pkg-deb-arm64
 	cd repo/ubuntu && apt-ftparchive release . > Release
 	cd repo/ubuntu && gpg --default-key "${email}" -abs -o - Release > Release.gpg
 	cd repo/ubuntu && gpg --default-key "${email}" --clearsign -o - Release > InRelease
-
-# pre-req:
-#   apt update && apt -y install gnupg gzip upx wget make apt-utils sudo dpkg-dev
-#   wget -q https://go.dev/dl/go1.21.4.linux-amd64.tar.gz && rm -rf /usr/local/go && tar -C /usr/local -xzf go1.21.4.linux-amd64.tar.gz && echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.$(cat /proc/$$/comm)rc
-#   source ~/.$(cat /proc/$$/comm)rc

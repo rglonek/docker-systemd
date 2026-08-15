@@ -12,7 +12,6 @@ docker run -itd robertglonek/ubuntu:20.04
 docker run -itd robertglonek/debian:12
 docker run -itd robertglonek/debian:11
 docker run -itd robertglonek/debian:10
-docker run -itd robertglonek/debian:9
 
 docker run -itd robertglonek/rockylinux:9
 docker run -itd robertglonek/rockylinux:8
@@ -22,9 +21,17 @@ docker run -itd robertglonek/centos:stream9
 
 ## Show me a demo
 
-Check out the [test/](/test) directory in this repo for a working basic demo. This installs and is capable of running: `aerospike`, `aerospike-prometheus-exporter`, `apache2`, `mariadb-server` and `postfix`. Some of these are already enabled by default upon installation. Just copy the `systemd-xxx` to `test/init` and go for it.
+`make conformance-quick` builds an image from `Dockerfile-ubuntu2404` and runs
+[test/conformance/run.sh](test/conformance/run.sh) against it: it boots the
+manager, installs real distro packages so their maintainer scripts run, and
+asserts that each one enables, starts, reports a plausible main PID, stops
+leaving zero surviving processes, survives ten restarts in a row, and shows up
+in `journalctl -u`. `make conformance` does the same across all ten supported
+base images.
 
-The demo also covers a specific scenario where a particular package requires `systemctl` commands to be available, or otherwise it won't successfully install. In this case, the `init` system is started during installation to allow said package to be installed.
+This also covers the case where a package's own installation calls `systemctl`:
+the control socket is bound before any unit starts, precisely so that
+maintainer scripts running inside `docker build` work.
 
 ## Manual installation and usage
 
@@ -47,10 +54,34 @@ docker logs -f bob
 docker exec -it bob systemctl list
 ```
 
-### Usage with special behavioural parameters (log services to stderr - `docker logs`, do not log to `/var/log/services/`, disable PID tracking via `LD_PRELOD`):
+### Usage with behavioural parameters
+
+Mirror unit logs into `docker logs`, skip the log files, and turn the manager's
+own logging up:
 
 ```bash
-docker run -itd --name bob mytest --log-to-stderr --no-logfile --no-pidtrack
+docker run -itd --name bob mytest --log-to-stderr --no-logfile --log-level=debug
+```
+
+Mirror only one noisy unit rather than everything:
+
+```bash
+docker run -itd --name bob mytest --log-to-stderr=nginx.service
+```
+
+Check what the manager probed at boot — the selected process-tracking backend,
+the runtime paths, and every unit directive it had to ignore:
+
+```bash
+docker exec bob systemctl show --property=Capabilities
+```
+
+Give shutdown room for a slow database. `docker stop -t <n>` should be at least
+the sum of the critical units' `TimeoutStopSec`:
+
+```bash
+docker run -itd --name bob mytest --shutdown-timeout=120s
+docker stop -t 120 bob
 ```
 
 ## Ubuntu/Debian using apt repository
