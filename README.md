@@ -153,6 +153,31 @@ make conformance      # L3/L4: one container per base image
 
 The L2 suite is where the design's premise is verified: `libc-daemon` (a `daemon(3)` service) is tracked and stopped, `ignore-sigterm` and `fork-bomb-on-term` both terminate with zero survivors, and a stale `PIDFile=` fails the unit while leaving the unrelated process alive.
 
+## Releasing
+
+Releases are cut by hand: **Actions → Release → Run workflow**
+([.github/workflows/release.yml](.github/workflows/release.yml)). The run tests, builds
+the artifact set below, signs the rpms if a `GPGPRIVATE` secret is configured, tags the
+commit it ran on and creates the GitHub release with that version's `CHANGELOG.md`
+section as the notes.
+
+| Artifact | What it is |
+| --- | --- |
+| `systemd-amd64`, `systemd-arm64` | the static binaries, for `COPY` into an image |
+| `docker-systemd_<version>_amd64.deb`, `docker-systemd_<version>_arm64.deb` | installer packages, `/usr/sbin/init-docker-systemd` |
+| `docker-systemd-<version>-2.x86_64.rpm`, `docker-systemd-<version>-2.aarch64.rpm` | the same, converted with `alien` (`-2` is alien's release bump) |
+| `SHA256SUMS` | checksums of the six files above |
+
+The version comes from the `VERSION` file unless the `version` input overrides it, and
+the run refuses to overwrite a tag or release that already exists. `dry_run` builds and
+checks the artifacts without tagging or releasing anything — either way they are attached
+to the workflow run itself. The release is a draft by default, so it can be reviewed
+before it goes public.
+
+`make release` produces the same set locally, into `./dist`; it needs `dpkg-dev` and
+`alien` installed. The apt and yum repositories on GitHub Pages are published separately,
+by [.github/workflows/build.yml](.github/workflows/build.yml).
+
 ## Design documents
 
 The full design — the process model, the defect register that motivated the rebuild, the unit semantics, the control protocol, the security model and the test strategy — lives in [designs/docs/next/](designs/docs/next/README.md).

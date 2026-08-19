@@ -53,6 +53,19 @@
 * `Restart=` on a `Type=notify` unit no longer leaks the old notify listener or
   loses every notification sent after the first restart.
 
+### Build and release
+
+* **Releases are cut from a manually triggered workflow** (Actions → Release →
+  Run workflow). It builds the published artifact set — `systemd-amd64`,
+  `systemd-arm64`, the `amd64`/`arm64` debs and the `x86_64`/`aarch64` rpms —
+  verifies the file names, signs the rpms when a signing key is configured,
+  writes a `SHA256SUMS` file and creates the tag and the GitHub release, with a
+  dry-run mode that builds and checks everything without releasing it. `make
+  release` produces the same set locally, into `./dist`. Packaging moved out of
+  the shell fragments embedded in the Makefile into `packaging/`, so the deb
+  metadata has one definition instead of one per architecture, and building a
+  deb no longer needs root.
+
 ## v1.0.0
 
 Clean-room reimplementation against the design in `designs/docs/next/`. The
