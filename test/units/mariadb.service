@@ -1,0 +1,28 @@
+[Unit]
+Description=MariaDB 10.6.12 database server
+Documentation=man:mariadbd(8)
+After=network.target
+
+[Service]
+Type=notify
+User=mysql
+Group=mysql
+ExecStartPre=/usr/bin/install -m 755 -o mysql -g root -d /var/run/mysqld
+ExecStartPre=-/bin/sh -c "systemctl unset-environment _WSREP_START_POSITION"
+ExecStart=/usr/sbin/mariadbd $MYSQLD_OPTS $_WSREP_NEW_CLUSTER $_WSREP_START_POSITION
+ExecStartPost=/bin/sh -c "systemctl unset-environment _WSREP_START_POSITION"
+TimeoutStartSec=900
+TimeoutStopSec=900
+Restart=on-abort
+RestartSec=5s
+UMask=007
+PrivateNetwork=false
+ProtectSystem=full
+PrivateDevices=true
+ProtectHome=true
+LimitNOFILE=32768
+LimitCORE=infinity
+OOMScoreAdjust=-600
+
+[Install]
+WantedBy=multi-user.target

@@ -245,7 +245,8 @@ DEPENDENCY_KINDS = [
 3.  prctl(PR_SET_CHILD_SUBREAPER, 1)      # belt and braces if we are not pid 1
 4.  start the reaper thread
 5.  backend probe (03 §5); log the chosen backend
-6.  mkdir -p  /run/docker-systemd{,/notify}, /run/systemd/system, /var/log/services
+6.  mkdir -p  /run/docker-systemd{,/notify}, /run/systemd/system,
+    /etc/systemd/system, /var/log/services
     write /run/docker-systemd/boot-id
 7.  self-install symlinks unless --no-install
 8.  bind the control socket, chmod 0600, start serving  <-- BEFORE starting units, so
@@ -254,15 +255,46 @@ DEPENDENCY_KINDS = [
 9.  install signal handlers: SIGTERM/SIGINT/SIGQUIT -> shutdown; SIGHUP -> daemon-reload;
     SIGUSR1 -> dump state; SIGCHLD via the reaper
 10. load the registry
-11. build the boot transaction from default.target (default: multi-user.target)
-12. execute it (parallel, ordered)
-13. log "Startup finished in Xms (N units started, M failed)"
-14. serve
+11. start the unit-directory watcher unless --no-auto-reload
+12. build the boot transaction from default.target (default: multi-user.target)
+13. execute it (parallel, ordered)
+14. log "Startup finished in Xms (N units started, M failed)"
+15. serve
 ```
 
 Step 8's ordering is load-bearing: package installation inside a `docker build` runs
 maintainer scripts that call `systemctl`, and those must work while units are still
 coming up.
+
+Step 11 is before the boot transaction, not after it, because a `docker exec apt
+install` can land while slow units are still coming up. The transaction is planned
+from an immutable registry snapshot, so a reload underneath it is no different from
+an operator running `daemon-reload` mid-boot.
+
+### 8.1 Automatic reload
+
+The unit search path and its `.wants`/`.requires`/`.d` subdirectories are watched with
+`inotify` (`IN_CREATE|IN_DELETE|IN_MOVED_TO|IN_MOVED_FROM|IN_CLOSE_WRITE` — not
+`IN_MODIFY`, which fires per `write()`). Any event triggers the same reload as
+`systemctl daemon-reload` once the directories have been quiet for 400 ms, bounded at
+5 s, so one `apt install` that drops a dozen unit files causes one reload.
+
+This is a deliberate departure from systemd, which reloads only when asked. The
+`daemon-reload` in a postinst is emitted only by `dh_installsystemd`/`%systemd_post`
+packaging, runs only when that script decided systemd was running, and never covers a
+unit file that arrived by `docker cp`, a Dockerfile `COPY`, `apk add`, or
+`rpm -i --noscripts`. The failure mode — a service the operator cannot see at all — is
+worse in a container than the cost of a periodic registry rebuild.
+
+A directory that does not exist yet cannot be watched, so its parent stands in until it
+appears; one level only, because the level above that is `/etc` and `/usr`. Watches are
+re-established after every reload, which is what picks up a `multi-user.target.wants/`
+directory created by a first install. `inotify_add_watch` is idempotent, so this needs
+no watch-descriptor bookkeeping and self-heals a directory that was deleted and
+recreated.
+
+Nothing is started, stopped or enabled as a side effect: the reload makes a unit
+visible, not active. `--no-auto-reload` restores the strict systemd behaviour.
 
 ## 9. Shutdown
 
@@ -323,6 +355,7 @@ v1 provided it does not restart units.
 | `--log-level=` | `info` | `error,warn,info,debug,trace` for the manager's own log |
 | `--default-target=` | `multi-user.target` | boot target |
 | `--no-install` | off | do not symlink over the distro's `init`/`systemctl`/… |
+| `--no-auto-reload` | off | do not reload unit files when the unit directories change (8.1) |
 | `--shutdown-timeout=` | `90s` | global shutdown budget |
 | `--backend=` | `auto` | `auto,cgroup2,subreaper,degraded` — force for testing |
 | `--supervisor-heartbeat=` | `1s` | tree re-scan interval while a unit has escaped members |

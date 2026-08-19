@@ -77,22 +77,36 @@ shows does not work.
 ### 3.1 Runtime state
 
 ```
-/run/docker-systemd/            0700 root:root
+/run/docker-systemd/            0711 root:root
 /run/docker-systemd/control.sock  0600 root:root
-/run/docker-systemd/notify/       0700 root:root
-/run/docker-systemd/notify/<unit>.sock  0666, inside the 0700 directory
+/run/docker-systemd/units/        0700 root:root
+/run/docker-systemd/notify/       0711 root:root
+/run/docker-systemd/notify/<unit>.sock  0666 <unit User=>:<unit Group=>
 ```
 
 `/run` is `tmpfs`-or-directory, root-owned, and not world-writable in any of the
-supported base images (unlike `/tmp`). The directory mode alone removes the entire
-class of attacks in §2.1–§2.4 for non-root users.
+supported base images (unlike `/tmp`). The directory modes remove the entire class of
+attacks in §2.1–§2.4 for non-root users: neither directory can be listed or written
+to, the control socket is `0600`, and the per-unit state files are `0600` inside a
+`0700` directory.
 
-The notify socket is mode `0666` because a unit that dropped to `User=` must write to
-it; it is protected by the `0700` parent directory, so only processes that init has
-told the path to — i.e. the unit's own processes, via `$NOTIFY_SOCKET` — can reach it.
-Additionally the supervisor **binds a distinct socket per unit** and enables
-`SO_PASSCRED`, so a message's sender pid comes from `SCM_CREDENTIALS`, not from the
-message body.
+The runtime and notify directories are `0711` — searchable but not listable — rather
+than `0700`. An earlier revision of this document specified `0700` and justified the
+notify socket's `0666` mode with "it is protected by the `0700` parent directory, so
+only processes that init has told the path to can reach it". That reasoning is wrong:
+the kernel checks the search bit on **every** component of a path regardless of how
+the process learned the path, so a `0700` parent made `$NOTIFY_SOCKET` undeliverable
+for exactly the units whose `User=` the `0666` mode existed to accommodate. A
+`Type=notify` unit running as a non-root user could never send `READY=1` and sat in
+`activating` until `TimeoutStartSec` — forever for `mysql.service`, which combines
+`User=mysql` with `TimeoutSec=infinity`.
+
+Path secrecy is not what defends the notify socket. The supervisor **binds a distinct
+socket per unit** and enables `SO_PASSCRED`, so a message's sender pid comes from
+`SCM_CREDENTIALS`, not from the message body; every assignment that changes unit
+state — `READY=`, `MAINPID=`, `STATUS=`, `STOPPING=`, `RELOADING=` — is discarded
+unless the kernel-supplied sender is a live member of that unit's process tree. The
+socket is additionally chowned to the unit's own resolved credentials.
 
 ### 3.2 Control socket authentication
 
@@ -163,11 +177,14 @@ avoid a partially written `.so` ever being loadable, authenticate its socket wit
 
 ## 4. Hardening checklist for the implementation
 
-- [ ] All runtime state under `/run/docker-systemd`, directory created `0700` **before**
+- [ ] All runtime state under `/run/docker-systemd`, directory created `0711` (`0700`
+      for the per-unit state directory, which nothing but the manager reads) **before**
       any socket is bound (create the directory, `chmod`, *then* bind — do not rely on
       umask).
 - [ ] `SO_PEERCRED` check on every control connection, before parsing the request.
-- [ ] `SO_PASSCRED` + `SCM_CREDENTIALS` on notify sockets; never trust `MAINPID=` alone.
+- [ ] `SO_PASSCRED` + `SCM_CREDENTIALS` on notify sockets; never trust `MAINPID=` alone,
+      and never trust a state-changing assignment from a live pid outside the unit's
+      tree.
 - [ ] Every pid obtained from outside the supervisor's own `fork` is validated for tree
       membership before it is waited on or signalled.
 - [ ] Signals delivered through `pidfd` where available, to eliminate PID-reuse

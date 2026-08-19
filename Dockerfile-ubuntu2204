@@ -1,8 +1,7 @@
 FROM golang:1.22 AS build
 WORKDIR /src
 COPY . /src/
-RUN cp forkpreload/*.so systemd/
-RUN env CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/sbin/init-docker-systemd .
+RUN env CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/sbin/init-docker-systemd ./cmd/docker-systemd
 
 FROM ubuntu:22.04
 COPY --from=build /usr/sbin/init-docker-systemd /usr/sbin/init-docker-systemd
