@@ -1,0 +1,177 @@
+name: Release
+
+# The manual release pipeline: run it from the Actions tab ("Run workflow") to
+# cut a release. It builds the published artifact set
+#
+#   systemd-amd64                      systemd-arm64
+#   docker-systemd_<ver>_amd64.deb     docker-systemd_<ver>_arm64.deb
+#   docker-systemd-<ver>-2.x86_64.rpm  docker-systemd-<ver>-2.aarch64.rpm
+#   SHA256SUMS
+#
+# tags the target commit and attaches the artifacts to a GitHub release. The
+# apt/yum repositories on GitHub Pages are published separately by build.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release. Empty means the VERSION file."
+        required: false
+        type: string
+      draft:
+        description: "Create the release as a draft (publish it by hand afterwards)."
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark the release as a pre-release."
+        type: boolean
+        default: false
+      dry_run:
+        description: "Build and check the artifacts only: no tag, no release."
+        type: boolean
+        default: false
+      run_tests:
+        description: "Run the unit tests before building."
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    env:
+      # The `secrets` context is not available in a step's `if`, so the one
+      # decision that depends on it is made here.
+      have_signing_key: ${{ secrets.GPGPRIVATE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Release notes and the tag guard need the history and the tags.
+          fetch-depth: 0
+
+      - name: Resolve the version
+        id: version
+        run: |
+          set -e
+          version='${{ inputs.version }}'
+          [ -n "$version" ] || version=$(cat VERSION)
+          case "$version" in
+            "") echo "no version given and VERSION is empty" >&2; exit 1 ;;
+            v*) echo "give the version without the leading 'v': $version" >&2; exit 1 ;;
+            *-*) echo "a '-' in $version would collide with the '-2' rpm release suffix" >&2; exit 1 ;;
+            *[!0-9A-Za-z.~+]*) echo "not a release version: $version" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "releasing $version from $(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refuse to re-release an existing tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          tag='${{ steps.version.outputs.version }}'
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "tag $tag already exists; bump VERSION or delete the tag" >&2; exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists" >&2; exit 1
+          fi
+
+      - name: Install packaging dependencies
+        # alien converts the debs to rpms; dpkg-dev is already on the runner but
+        # is named here so the dependency is not implicit.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends alien dpkg-dev rpm
+
+      - name: Install golang
+        # The toolchain comes from go.mod rather than an implicit download, so
+        # a release cannot silently be built with a different one (F11).
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - name: Test before release
+        if: ${{ inputs.run_tests }}
+        run: make test
+
+      - name: Build the release artifacts
+        run: make release ver='${{ steps.version.outputs.version }}'
+
+      - name: Sign the rpms
+        # Only when the signing key is configured: a fork, or a dry run from a
+        # branch, still produces a complete (unsigned) artifact set.
+        if: ${{ env.have_signing_key == 'true' }}
+        env:
+          gpgprivate: ${{ secrets.GPGPRIVATE }}
+        run: |
+          set -e
+          umask 077
+          printf '%s' "$gpgprivate" | base64 -d > /tmp/private.asc
+          gpg --batch --import /tmp/private.asc
+          shred -u /tmp/private.asc
+          key=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          [ -n "$key" ] || { echo "GPGPRIVATE imported no secret key" >&2; exit 1; }
+          # %__gpg has to be spelled out: rpm defaults to gpg2, which the
+          # runner does not have.
+          printf '%%_signature gpg\n%%_gpg_path %s/.gnupg\n%%_gpg_name %s\n%%__gpg %s\n' \
+            "$HOME" "$key" "$(command -v gpg)" > ~/.rpmmacros
+          rpmsign --addsign dist/*.rpm
+          # Assert the signature header really landed. `rpm --checksig` would
+          # need the public key in rpm's own keyring to say anything useful;
+          # this only asks whether the package carries a signature at all.
+          for pkg in dist/*.rpm; do
+            sig=$(rpm -qp --qf '[%{RSAHEADER:pgpsig}][%{DSAHEADER:pgpsig}][%{SIGPGP:pgpsig}]' "$pkg")
+            case "$sig" in
+              *"Key ID"*) echo "$pkg: $sig" ;;
+              *) echo "$pkg came out of rpmsign unsigned" >&2; exit 1 ;;
+            esac
+          done
+
+      - name: Refresh the checksums
+        # Signing rewrites the rpm headers, so SHA256SUMS is regenerated after
+        # it rather than before.
+        run: make dist-checksums dist-verify ver='${{ steps.version.outputs.version }}'
+
+      - name: Keep the artifacts on the workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-systemd-${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Write the release notes
+        run: |
+          set -e
+          packaging/release-notes.sh '${{ steps.version.outputs.version }}' > /tmp/notes.md
+          cat /tmp/notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          version='${{ steps.version.outputs.version }}'
+          commit=$(git rev-parse --short HEAD)
+          gh release create "$version" \
+            --target "$(git rev-parse HEAD)" \
+            --title "v${version} - ${commit}" \
+            --notes-file /tmp/notes.md \
+            ${{ inputs.draft && '--draft' || '' }} \
+            ${{ inputs.prerelease && '--prerelease' || '' }} \
+            dist/systemd-amd64 \
+            dist/systemd-arm64 \
+            "dist/docker-systemd_${version}_amd64.deb" \
+            "dist/docker-systemd_${version}_arm64.deb" \
+            "dist/docker-systemd-${version}-2.x86_64.rpm" \
+            "dist/docker-systemd-${version}-2.aarch64.rpm" \
+            dist/SHA256SUMS
