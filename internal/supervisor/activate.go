@@ -62,7 +62,14 @@ func (s *Supervisor) activate() bool {
 		if path == "" {
 			path = filepath.Join(paths.NotifyDir, s.unit.Name+".sock")
 		}
-		l, err := NewNotifyListener(path)
+		// activate() runs again on every Restart=; the previous listener still
+		// holds the now-unlinked socket, and the run loop still selects on its
+		// channel, so it has to go before a new one takes the path.
+		if s.notify != nil {
+			s.notify.Close()
+			s.notify = nil
+		}
+		l, err := NewNotifyListener(path, cred)
 		if err != nil {
 			s.fail(proto.ResultResources, "cannot create $NOTIFY_SOCKET: %v", err)
 			return false
@@ -265,12 +272,18 @@ func (s *Supervisor) waitReady(p *process, deadline time.Time) bool {
 					s.log.Warnf("ignoring MAINPID=%d: not a member of this unit's process tree", pid)
 				}
 			case "READY":
-				if n.Value == "1" {
-					if s.MainPID() == p.pid && n.SenderPID > 0 && n.SenderPID != p.pid && s.inTree(n.SenderPID) {
-						s.setMainPID(n.SenderPID)
-					}
-					return true
+				if n.Value != "1" {
+					break
 				}
+				if !s.notifierAllowed(n.SenderPID) {
+					s.log.Warnf("ignoring READY=1 from pid %d: not a member of this unit's process tree",
+						n.SenderPID)
+					break
+				}
+				if s.MainPID() == p.pid && n.SenderPID != p.pid && s.inTree(n.SenderPID) {
+					s.setMainPID(n.SenderPID)
+				}
+				return true
 			}
 		case st, ok := <-s.mainExit:
 			if !ok {
@@ -494,7 +507,7 @@ func (s *Supervisor) runSync(c unitfile.Command, env map[string]string, deadline
 		}
 		<-p.exit
 		return ExitStatus{PID: p.pid, Code: 1}, fmt.Errorf("timed out after %s", timeout)
-	case <-s.quit:
+	case <-s.abortCh():
 		if ref, ok := proctree.Lookup(p.pid); ok {
 			_ = proctree.Signal(ref, syscallSIGTERM)
 		}
@@ -559,7 +572,7 @@ func (s *Supervisor) cleanupRuntimeDirs() {
 
 // writeStateFile records enough for daemon-reexec to reattach.
 func (s *Supervisor) writeStateFile() {
-	if err := os.MkdirAll(paths.UnitStateDir, paths.ModeRuntimeDir); err != nil {
+	if err := os.MkdirAll(paths.UnitStateDir, paths.ModeStateDir); err != nil {
 		return
 	}
 	content := fmt.Sprintf("unit=%s\ninvocation=%s\nsupervisor=%d\nmain=%d\n",

@@ -46,12 +46,25 @@ const (
 	MachineIDFile = "/etc/machine-id"
 )
 
-// Modes for the runtime layout. The control directory is 0700 so that no
-// non-root uid in the container can reach the socket at all.
+// Modes for the runtime layout.
+//
+// The runtime and notify directories are 0711 — searchable but not listable —
+// rather than 0700. A unit that dropped to User= has to reach its own
+// $NOTIFY_SOCKET, and the kernel enforces the search bit on every component of
+// the path regardless of whether the process was told where the socket is. With
+// 0700 a Type=notify unit running as a non-root user could never deliver
+// READY=1, so it hung in "activating" until TimeoutStartSec — forever for
+// mysql.service, which ships TimeoutSec=infinity.
+//
+// Nothing is given away by the search bit: neither directory can be listed, the
+// control socket is 0600, per-unit state files are 0600, and every notification
+// that changes unit state is attributed to a tree member through
+// SO_PASSCRED before it is acted on.
 const (
-	ModeRuntimeDir = 0o700
+	ModeRuntimeDir = 0o711
+	ModeStateDir   = 0o700
 	ModeControlSck = 0o600
-	ModeNotifyDir  = 0o700
+	ModeNotifyDir  = 0o711
 	ModeNotifySck  = 0o666
 	ModeLogDir     = 0o750
 	ModeLogFile    = 0o640
