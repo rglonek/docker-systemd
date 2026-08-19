@@ -286,11 +286,19 @@ func (m *Manager) Boot() int {
 func (m *Manager) prepareFilesystem() error {
 	// The directory is created and chmod'ed before any socket is bound; the
 	// umask is deliberately not relied on (09 §4).
-	for _, d := range []string{paths.RuntimeDir, paths.NotifyDir, paths.UnitStateDir} {
-		if err := os.MkdirAll(d, paths.ModeRuntimeDir); err != nil {
+	dirs := []struct {
+		path string
+		mode os.FileMode
+	}{
+		{paths.RuntimeDir, paths.ModeRuntimeDir},
+		{paths.NotifyDir, paths.ModeNotifyDir},
+		{paths.UnitStateDir, paths.ModeStateDir},
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d.path, d.mode); err != nil {
 			return err
 		}
-		if err := os.Chmod(d, paths.ModeRuntimeDir); err != nil {
+		if err := os.Chmod(d.path, d.mode); err != nil {
 			return err
 		}
 	}

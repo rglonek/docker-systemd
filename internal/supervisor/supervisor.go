@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -76,6 +77,20 @@ type Supervisor struct {
 	ctrlFrames chan proto.Frame
 	quit       chan struct{}
 	quitOnce   sync.Once
+
+	// starting is true while activate() owns the goroutine, which is when
+	// nothing is draining ctrlFrames. A stop that arrives in that window is
+	// applied through quit instead of the frame queue.
+	starting atomic.Bool
+	// stopping is true from the moment the termination ladder begins, so that
+	// ExecStop=/ExecStopPost= are not themselves cancelled by quit.
+	stopping atomic.Bool
+	// pending records a stop the manager asked for; it is set exactly once,
+	// before quit is closed.
+	pendingMu      sync.Mutex
+	pendingSet     bool
+	pendingMode    proto.StopMode
+	pendingTimeout time.Duration
 	// exitCode is the supervisor's own exit status; the manager reads it as
 	// the authoritative "unit fully stopped" event (invariant I4).
 	exitCode int
@@ -172,12 +187,98 @@ func (s *Supervisor) readControl() {
 			s.quitOnce.Do(func() { close(s.quit) })
 			return
 		}
+		// A stop that arrives while the unit is still activating cannot wait in
+		// the queue: nothing drains ctrlFrames until activation finishes, so a
+		// unit with a long TimeoutStartSec would be unstoppable for the whole
+		// budget — infinitely so for mysql.service, which sets
+		// TimeoutSec=infinity. Unwind the activation instead.
+		if s.starting.Load() {
+			if f.Type == proto.TypeStop {
+				var req proto.StopRequest
+				_ = json.Unmarshal(f.Payload, &req)
+				s.requestStop(req)
+				continue
+			}
+			// Everything else may queue, but never at the cost of blocking this
+			// reader: a full queue would swallow the stop that comes after it.
+			// A dropped query costs nothing — the manager's state replica is
+			// already current.
+			select {
+			case s.ctrlFrames <- f:
+			default:
+				s.log.Warnf("dropping control frame type %d received during activation", f.Type)
+			}
+			continue
+		}
 		select {
 		case s.ctrlFrames <- f:
 		case <-s.quit:
 			return
 		}
 	}
+}
+
+// requestStop records a stop asked for during activation and unblocks the
+// activation path through quit.
+func (s *Supervisor) requestStop(req proto.StopRequest) {
+	timeout := s.unit.Service.EffectiveTimeoutStop()
+	if req.TimeoutMS > 0 {
+		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+	}
+	s.pendingMu.Lock()
+	if !s.pendingSet {
+		s.pendingSet, s.pendingMode, s.pendingTimeout = true, req.Mode, timeout
+	}
+	s.pendingMu.Unlock()
+	s.quitOnce.Do(func() { close(s.quit) })
+}
+
+// pendingStop returns the stop the manager asked for during activation, if any.
+func (s *Supervisor) pendingStop() (proto.StopMode, time.Duration, bool) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return s.pendingMode, s.pendingTimeout, s.pendingSet
+}
+
+// runActivate runs the activation sequence with the window marked, so that a
+// concurrent stop request is routed through quit rather than through the frame
+// queue nobody is reading.
+func (s *Supervisor) runActivate() bool {
+	s.starting.Store(true)
+	defer s.starting.Store(false)
+	return s.activate()
+}
+
+// abortCh is the channel that cancels a synchronous ExecXxx= command.
+//
+// It is nil — never ready — once the unit is stopping: ExecStop= and
+// ExecStopPost= run *because* the unit is going away, so cancelling them on
+// quit would mean the shutdown path killed the very commands that implement a
+// clean stop before they could do anything.
+func (s *Supervisor) abortCh() <-chan struct{} {
+	if s.stopping.Load() {
+		return nil
+	}
+	return s.quit
+}
+
+// notifyChan is the run loop's view of the notify socket. It is re-read on
+// every iteration because Restart= rebinds the listener.
+func (s *Supervisor) notifyChan() <-chan Notification {
+	if s.notify == nil {
+		return nil
+	}
+	return s.notify.Notifications()
+}
+
+// finalStop applies whatever stop is outstanding: the one the manager asked for
+// if there is one, otherwise a shutdown-mode stop.
+func (s *Supervisor) finalStop() {
+	mode, timeout, ok := s.pendingStop()
+	if !ok {
+		mode, timeout = proto.StopShutdown, s.unit.Service.EffectiveTimeoutStop()
+	}
+	s.stop(mode, timeout)
 }
 
 // send writes one frame to the manager.
@@ -255,7 +356,13 @@ func (s *Supervisor) setStatusText(t string) {
 func (s *Supervisor) serve() {
 	if s.cfg.Mode == "adopt" {
 		s.adoptRecovered()
-	} else if !s.activate() {
+	} else if !s.runActivate() {
+		if _, _, ok := s.pendingStop(); ok {
+			// The manager stopped the unit mid-activation; whatever the
+			// activation had already spawned still has to be torn down.
+			s.finalStop()
+			return
+		}
 		// Activation failed or was skipped by a condition; the state is
 		// already reported. Run ExecStopPost= and leave.
 		s.runStopPost()
@@ -270,15 +377,10 @@ func (s *Supervisor) serve() {
 	tick := time.NewTicker(heartbeat)
 	defer tick.Stop()
 
-	var notifyCh <-chan Notification
-	if s.notify != nil {
-		notifyCh = s.notify.Notifications()
-	}
-
 	for {
 		select {
 		case <-s.quit:
-			s.stop(proto.StopShutdown, s.unit.Service.EffectiveTimeoutStop())
+			s.finalStop()
 			return
 
 		case f := <-s.ctrlFrames:
@@ -296,7 +398,7 @@ func (s *Supervisor) serve() {
 				return
 			}
 
-		case n := <-notifyCh:
+		case n := <-s.notifyChan():
 			s.handleNotification(n)
 
 		case st := <-s.reaper.Adopted():
@@ -415,8 +517,12 @@ func (s *Supervisor) handleMainExit(st ExitStatus) bool {
 		case <-s.quit:
 			return true
 		}
-		if s.activate() {
+		if s.runActivate() {
 			return false
+		}
+		if _, _, ok := s.pendingStop(); ok {
+			s.finalStop()
+			return true
 		}
 		s.runStopPost()
 		s.exitCode = 1
@@ -547,6 +653,11 @@ func (s *Supervisor) startLimitHit(n int) bool {
 // handleNotification applies one sd_notify assignment.
 func (s *Supervisor) handleNotification(n Notification) {
 	s.send(proto.TypeNotify, proto.NotifyReport{SenderPID: n.SenderPID, Key: n.Key, Value: n.Value})
+	if !s.notifierAllowed(n.SenderPID) {
+		s.log.Warnf("ignoring %s= from pid %d: not a member of this unit's process tree",
+			n.Key, n.SenderPID)
+		return
+	}
 	switch n.Key {
 	case "STATUS":
 		s.setStatusText(n.Value)
@@ -576,6 +687,24 @@ func (s *Supervisor) handleNotification(n Notification) {
 		s.setStatusText("errno " + n.Value)
 	}
 	s.report()
+}
+
+// notifierAllowed reports whether a notification may change this unit's state.
+//
+// The sender pid is kernel-supplied via SO_PASSCRED, and the notify socket is
+// reachable by any uid that knows its path, so attribution is what keeps an
+// unrelated process from declaring a unit ready. A sender that has already
+// exited cannot be attributed either way and is accepted: notify-and-exit is a
+// legitimate pattern, and refusing it would hang the unit for TimeoutStartSec.
+func (s *Supervisor) notifierAllowed(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if s.inTree(pid) {
+		return true
+	}
+	_, alive := proctree.Lookup(pid)
+	return !alive
 }
 
 // inTree reports whether a pid is a member of this unit. Every pid obtained
@@ -666,6 +795,9 @@ func (s *Supervisor) runStopPost() {
 	s.cleanupRuntimeDirs()
 	if s.notify != nil {
 		s.notify.Close()
+		// Clearing it matters: a closed channel is permanently ready, so a run
+		// loop still selecting on it would spin.
+		s.notify = nil
 	}
 	_ = os.Remove(s.stateFilePath())
 }

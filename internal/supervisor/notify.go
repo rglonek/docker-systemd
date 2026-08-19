@@ -30,15 +30,33 @@ type NotifyListener struct {
 	once sync.Once
 }
 
-// NewNotifyListener binds a per-unit datagram socket with SO_PASSCRED enabled.
+// NewNotifyListener binds a per-unit datagram socket with SO_PASSCRED enabled
+// and hands it to the unit's own credentials.
 //
 // The socket is mode 0666 because a unit that dropped to User= must write to
-// it; it is protected by the 0700 parent directory, so only processes that
-// init told the path to — the unit's own processes, via $NOTIFY_SOCKET — can
-// reach it.
-func NewNotifyListener(path string) (*NotifyListener, error) {
+// it, and it is owned by that unit's uid/gid. Its directories are 0711: a
+// non-root unit process cannot reach a path whose parents it may not search,
+// however well it knows the path, so the 0700 the design originally called for
+// made $NOTIFY_SOCKET undeliverable for exactly the units that needed the 0666
+// mode in the first place. Spoofing is prevented by SO_PASSCRED attribution
+// rather than by the directory mode.
+func NewNotifyListener(path string, cred credentials) (*NotifyListener, error) {
 	if err := os.MkdirAll(paths.NotifyDir, paths.ModeNotifyDir); err != nil {
 		return nil, err
+	}
+	// MkdirAll is a no-op on a directory the manager already created, and it
+	// applies the umask; chmod both components explicitly so the search bit is
+	// there whatever created them.
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{paths.RuntimeDir, paths.ModeRuntimeDir},
+		{paths.NotifyDir, paths.ModeNotifyDir},
+	} {
+		if err := os.Chmod(d.path, d.mode); err != nil {
+			return nil, err
+		}
 	}
 	_ = os.Remove(path)
 	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
@@ -59,6 +77,19 @@ func NewNotifyListener(path string) (*NotifyListener, error) {
 	if err := os.Chmod(path, paths.ModeNotifySck); err != nil {
 		unix.Close(fd)
 		return nil, err
+	}
+	// Hand the socket to the unit's own identity as well. This is ownership
+	// hygiene rather than the thing that grants access — the 0666 mode above is
+	// — so a filesystem that refuses the chown must not fail the unit.
+	if cred.uid != nil || cred.gid != nil {
+		uid, gid := -1, -1
+		if cred.uid != nil {
+			uid = *cred.uid
+		}
+		if cred.gid != nil {
+			gid = *cred.gid
+		}
+		_ = os.Chown(path, uid, gid)
 	}
 	l := &NotifyListener{path: path, fd: fd, ch: make(chan Notification, 64)}
 	go l.loop()

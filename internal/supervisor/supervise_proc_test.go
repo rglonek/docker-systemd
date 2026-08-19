@@ -291,6 +291,67 @@ func TestNotifyServiceReportsReady(t *testing.T) {
 	h.assertNoSurvivors()
 }
 
+// A Type=notify unit that dropped to User= must still be able to reach its
+// $NOTIFY_SOCKET. The socket lives under /run/docker-systemd, and the kernel
+// checks the search bit on every component of that path no matter that the unit
+// was handed the path in the environment — so 0700 directories made READY=1
+// undeliverable for every non-root Type=notify unit. mysql.service is the
+// canonical victim: User=mysql plus TimeoutSec=infinity meant it sat in
+// "activating" forever while mysqld logged that it was ready for connections.
+func TestNotifyServiceAsNonRootUser(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("dropping to another uid needs root")
+	}
+	// The unprivileged uid has to be able to reach the test binaries.
+	if err := os.Chmod(binaries(t), 0o755); err != nil {
+		t.Fatalf("chmod bin dir: %v", err)
+	}
+
+	const nobody = "65534"
+	u := unitFor(t, "notify-user-test.service", func(u *unitfile.Unit) {
+		u.Service.Type = unitfile.TypeNotify
+		u.Service.User = nobody
+		u.Service.Group = nobody
+		u.Service.TimeoutStartSec = 10 * time.Second
+	})
+	setExecStart(t, u, daemonPath(t)+" notify 0s")
+
+	h := start(t, u)
+	st := h.waitState(15*time.Second, proto.StateActive)
+	if st.MainPID <= 0 {
+		t.Fatalf("MainPID = %d", st.MainPID)
+	}
+	h.stop(5 * time.Second)
+	h.assertNoSurvivors()
+}
+
+// A stop that arrives while the unit is still activating must be acted on
+// immediately. Nothing drains the control queue during activation, so a queued
+// stop would wait out TimeoutStartSec — which mysql.service sets to infinity,
+// making a stuck unit unstoppable.
+func TestStopDuringActivation(t *testing.T) {
+	u := unitFor(t, "stop-while-activating-test.service", func(u *unitfile.Unit) {
+		u.Service.Type = unitfile.TypeNotify
+		// Long enough that only an immediate stop can pass this test.
+		u.Service.TimeoutStartSec = 10 * time.Minute
+		u.Service.TimeoutStopSec = 3 * time.Second
+	})
+	// `foreground` never sends READY=1, so activation blocks indefinitely.
+	setExecStart(t, u, daemonPath(t)+" foreground")
+
+	h := start(t, u)
+	h.waitState(10*time.Second, proto.StateActivating)
+	// Give the daemon a moment to be a real, running tree member.
+	time.Sleep(200 * time.Millisecond)
+
+	begin := time.Now()
+	h.stop(5 * time.Second)
+	if elapsed := time.Since(begin); elapsed > 15*time.Second {
+		t.Errorf("the stop took %s; it must not wait for TimeoutStartSec", elapsed)
+	}
+	h.assertNoSurvivors()
+}
+
 // A Type=notify unit that never reports readiness must fail at
 // TimeoutStartSec rather than hanging.
 func TestNotifyStartTimeout(t *testing.T) {

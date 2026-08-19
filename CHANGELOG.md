@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## Unreleased
+
+### Fixes
+
+* **A `Type=notify` unit that drops to `User=` can now report readiness.**
+  `/run/docker-systemd` and its `notify/` subdirectory were `0700`, so a unit
+  running as a non-root user was denied the search permission it needed to
+  reach its own `$NOTIFY_SOCKET`; `READY=1` never arrived and the unit sat in
+  `activating` until `TimeoutStartSec`. Both directories are now `0711` —
+  searchable but still not listable — and the per-unit socket is chowned to the
+  unit's resolved credentials. `mysql.service` was the visible casualty:
+  `User=mysql` plus `TimeoutSec=infinity` meant `systemctl start mysql` hung
+  forever while `mysqld` logged that it was ready for connections.
+* **`systemctl stop` works on a unit that is still activating.** Nothing drained
+  the supervisor's control queue during activation, so a stop request waited out
+  the whole start timeout — indefinitely for a unit with
+  `TimeoutStartSec=infinity`. A stop that arrives mid-activation now unwinds the
+  activation and runs the termination ladder immediately.
+* **`ExecStop=`/`ExecStopPost=` are no longer killed on sight during shutdown.**
+  They ran through the same cancel-on-quit path as the startup commands, so on
+  container shutdown they were SIGTERMed the moment they started.
+* A state-changing sd_notify assignment from a live process outside the unit's
+  tree is now discarded rather than acted on.
+* `Restart=` on a `Type=notify` unit no longer leaks the old notify listener or
+  loses every notification sent after the first restart.
+
 ## v1.0.0
 
 Clean-room reimplementation against the design in `designs/docs/next/`. The

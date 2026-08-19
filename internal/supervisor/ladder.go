@@ -32,6 +32,7 @@ const finalKillRounds = 10
 //     no polling and no per-unit bookkeeping to know the unit is gone.
 func (s *Supervisor) stop(mode proto.StopMode, timeout time.Duration) {
 	svc := s.unit.Service
+	s.stopping.Store(true)
 	s.setState(proto.StateDeactivating, "stop", "")
 	s.report()
 	deadline := time.Now().Add(timeout)
