@@ -68,6 +68,7 @@ Self-installation is idempotent, preserves an existing real binary as `<name>.di
 | `--log-level=` | `info` | `error`, `warn`, `info`, `debug`, `trace` |
 | `--default-target=` | `multi-user.target` | boot target |
 | `--no-install` | off | do not symlink over the distro's `init`/`systemctl`/… |
+| `--no-auto-reload` | off | do not reload unit files when the unit directories change on disk |
 | `--shutdown-timeout=` | `90s` | global shutdown budget |
 | `--backend=` | `auto` | `auto`, `cgroup2`, `subreaper`, `degraded` — force for testing |
 | `--supervisor-heartbeat=` | `1s` | tree re-scan interval while a unit has escaped members |
@@ -79,7 +80,7 @@ Self-installation is idempotent, preserves an existing real binary as `<name>.di
 
 ## Security
 
-Everything runtime lives under `/run/docker-systemd/` (`0700 root:root`), with the control socket at `0600`, authenticated with `SO_PEERCRED`: **only uid 0 may control the manager** by default. Versions up to 0.5.x put the socket in `/tmp` with the process umask, so any uid in the container could start a root unit, mask a security-relevant one, or power the container off.
+Everything runtime lives under `/run/docker-systemd/` (`0711 root:root` — searchable, so a unit that dropped to `User=` can reach its own `$NOTIFY_SOCKET`, but not listable), with the control socket at `0600`, authenticated with `SO_PEERCRED`: **only uid 0 may control the manager** by default. Versions up to 0.5.x put the socket in `/tmp` with the process umask, so any uid in the container could start a root unit, mask a security-relevant one, or power the container off.
 
 A pid read from `PIDFile=` is accepted only if it is a member of the unit's own process tree; otherwise the unit fails with a specific, greppable message. This closes the escalation where a unit running as `User=nobody` writes root's pid into its own pid file, and also catches the far more common benign case of a stale pid file.
 
@@ -112,6 +113,17 @@ Every rejected or clamped directive produces exactly one structured warning at l
 7. **`systemctl --user` is not supported.**
 8. **Process tracking uses subreaper adoption rather than cgroup membership.** A process that a unit hands to a *helper started outside the unit* is not tracked. Everything started by the unit itself is.
 9. **Unit commands do not run under a shell.** See below.
+10. **Unit files are reloaded automatically when they change on disk.** See below.
+
+## Automatic `daemon-reload`
+
+`apt install mysql-server` — or `dnf`, or `apk`, or a `docker cp` of a hand-written unit — makes the new unit visible immediately. There is no need to remember `systemctl daemon-reload` first, and `systemctl start mysql` right after the install works.
+
+The manager watches the unit directories (`/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`, `/lib/systemd/system` and their `.wants`/`.requires`/`.d` subdirectories) with `inotify`. Events are coalesced, so one `apt install` that drops twelve unit files causes one reload, not twelve.
+
+This is deliberately more than systemd does. Real systemd reloads only when asked, and relies on every package's postinst calling `systemctl daemon-reload` — which happens only for packaging built with `dh_installsystemd`/`%systemd_post`, only when the postinst decided systemd was running, and never at all for a unit file that arrived by any other route. In a container the cost of that being wrong is a service the operator cannot see, so the manager watches rather than trusting the hook.
+
+The reload is exactly the one `systemctl daemon-reload` performs: units already running keep the configuration they were started with, and **nothing is started, stopped or enabled as a side effect** — the new unit becomes visible, not active. Use `--no-auto-reload` for the strict systemd behaviour.
 
 ## Upgrading from 0.5.x
 

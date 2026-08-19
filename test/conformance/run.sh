@@ -58,8 +58,12 @@ check "daemon-reload returns 0" in_container systemctl daemon-reload
 check "/run/systemd/system exists" in_container test -d /run/systemd/system
 
 # --- E1: the control socket is not world-accessible --------------------------
-check_out "the runtime directory is 0700" "700" \
+# 0711, not 0700: a Type=notify unit that dropped to User= needs the search bit
+# to reach its own $NOTIFY_SOCKET. Neither directory is listable.
+check_out "the runtime directory is 0711" "711" \
     in_container stat -c '%a' /run/docker-systemd
+check_out "the notify directory is 0711" "711" \
+    in_container stat -c '%a' /run/docker-systemd/notify
 check_out "the control socket is 0600" "600" \
     in_container stat -c '%a' /run/docker-systemd/control.sock
 check "the legacy /tmp socket is absent by default" \
@@ -122,6 +126,23 @@ if [ "${#PACKAGES[@]}" -gt 0 ]; then
         PACKAGES=()
     fi
 fi
+
+# --- the unit directories are watched: no manual daemon-reload is needed -----
+# Asserted before any explicit reload below, which would mask it.
+for pkg in "${PACKAGES[@]}"; do
+    unit="$pkg"
+    case "$pkg" in
+    openssh-server) unit=ssh ;;
+    esac
+    seen=0
+    for _ in $(seq 1 10); do
+        if in_container systemctl cat "$unit" >/dev/null 2>&1; then seen=1; break; fi
+        sleep 1
+    done
+    [ "$seen" = 1 ] &&
+        pass "$unit: visible without an explicit daemon-reload" ||
+        fault "$unit: not visible until daemon-reload was run by hand"
+done
 
 for pkg in "${PACKAGES[@]}"; do
     unit="$pkg"

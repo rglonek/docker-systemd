@@ -2,7 +2,34 @@
 
 ## Unreleased
 
+### Changes
+
+* **Unit files are reloaded automatically when they change on disk.**
+  `apt install mysql-server`, `dnf install httpd`, `apk add postfix` or a
+  `docker cp` of a hand-written unit now makes the unit visible without anyone
+  running `systemctl daemon-reload` first. The manager watches the unit
+  directories and their `.wants`/`.requires`/`.d` subdirectories with
+  `inotify`, coalescing a burst of changes into a single reload. Relying on the
+  package's postinst to call `daemon-reload` covers only packaging built with
+  `dh_installsystemd`/`%systemd_post`, only when that script decided systemd
+  was running, and never a unit file that arrived any other way. The reload is
+  the one `daemon-reload` performs — running units keep the configuration they
+  were started with, and nothing is started, stopped or enabled as a side
+  effect. `--no-auto-reload` restores the strict systemd behaviour.
+* `/etc/systemd/system` is created at boot if it is missing, as systemd ships
+  it; `systemctl enable` previously created it on first use.
+
 ### Fixes
+
+* **`daemon-reload` racing with a unit lookup.** The registry pointer was
+  swapped under a lock but the loader that resolves template instances against
+  it was not, so a reload concurrent with a `systemctl` query was a data race
+  and could pair a new snapshot with the previous generation's loader. Both are
+  now published together, and a reload whose load fails keeps the previous
+  snapshot instead of replacing the loader out from under it.
+* The conformance runner still asserted that `/run/docker-systemd` is `0700`,
+  which the `Type=notify`/`User=` fix above changed to `0711`; it failed on
+  every image. The README said `0700` for the same reason.
 
 * **A `Type=notify` unit that drops to `User=` can now report readiness.**
   `/run/docker-systemd` and its `notify/` subdirectory were `0700`, so a unit

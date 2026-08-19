@@ -134,6 +134,8 @@ Did you know: centos-stream official repository is: `quay.io/centos/centos:strea
 
 Just use `systemctl/journalctl/service` commands inside the container as one normally would for the most part.
 
+Installing a package makes its units visible straight away — unlike on a real systemd host, there is no need to run `systemctl daemon-reload` first, because the unit directories are watched. See [Automatic `daemon-reload`](README.md#automatic-daemon-reload).
+
 ## Example apache2 web server install
 
 Dockerfile:

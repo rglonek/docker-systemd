@@ -115,6 +115,8 @@ func runManager(args []string) int {
 			opts.NoLogfile = true
 		case a == "--no-install":
 			opts.NoInstall = true
+		case a == "--no-auto-reload":
+			opts.NoAutoReload = true
 		case a == "--compat-tmp-socket":
 			opts.CompatTmpSocket = true
 		case a == "--compat-shell-exec":
@@ -274,6 +276,7 @@ Options:
   --log-level=LEVEL           error, warn, info, debug or trace (default info)
   --default-target=TARGET     Boot target (default multi-user.target)
   --no-install                Do not symlink over the distro's init/systemctl/...
+  --no-auto-reload            Do not reload unit files when they change on disk
   --shutdown-timeout=TIME     Global shutdown budget (default 90s)
   --backend=NAME              auto, cgroup2, subreaper or degraded
   --supervisor-heartbeat=TIME Tree re-scan interval (default 1s)

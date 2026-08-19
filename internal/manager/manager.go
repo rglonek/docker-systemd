@@ -33,6 +33,7 @@ type Options struct {
 	LogLevel         logging.Level
 	DefaultTarget    string
 	NoInstall        bool
+	NoAutoReload     bool
 	ShutdownTimeout  time.Duration
 	Backend          backend.Name
 	HeartbeatMS      int
@@ -129,8 +130,12 @@ func (m *Manager) Registry() *unitfile.Registry {
 // Get resolves a unit name against the current snapshot, materialising a
 // template instance on demand.
 func (m *Manager) Get(name string) *unitfile.Unit {
-	reg := m.Registry()
-	if reg == nil {
+	// The loader is read with the snapshot, under the same lock: it is the one
+	// that produced this registry, and a concurrent reload replaces both.
+	m.regMu.RLock()
+	reg, loader := m.registry, m.loader
+	m.regMu.RUnlock()
+	if reg == nil || loader == nil {
 		return nil
 	}
 	if u := reg.Get(name); u != nil {
@@ -138,7 +143,7 @@ func (m *Manager) Get(name string) *unitfile.Unit {
 	}
 	// A template instance that is not yet in the registry is resolved from its
 	// template rather than materialised on disk (05 §6).
-	u, err := m.loader.ResolveTemplate(reg, name)
+	u, err := loader.ResolveTemplate(reg, name)
 	if err != nil {
 		return nil
 	}
@@ -271,6 +276,12 @@ func (m *Manager) Boot() int {
 
 	m.loadRegistry()
 
+	// Started before the boot transaction, not after it: a `docker exec apt
+	// install` can land while slow units are still coming up, and the boot
+	// transaction is planned from an immutable registry snapshot, so a reload
+	// underneath it is no different from an operator running daemon-reload.
+	m.startAutoReload()
+
 	target := m.opts.DefaultTarget
 	m.log.Infof("booting %s", target)
 	started, failed := m.bootTransaction(target)
@@ -307,6 +318,13 @@ func (m *Manager) prepareFilesystem() error {
 	if err := os.MkdirAll(paths.SystemdMarkerDir, paths.ModeMarkerDir); err != nil {
 		m.log.Warnf("cannot create %s: %v; distro maintainer scripts may skip unit registration",
 			paths.SystemdMarkerDir, err)
+	}
+	// The administrator unit directory is where enable symlinks, drop-ins and
+	// hand-copied units land. systemd ships it, `systemctl enable` creates it
+	// on demand, and the auto-reload watcher cannot watch a directory that is
+	// not there — so create it up front rather than at first write.
+	if err := os.MkdirAll(paths.WritableUnitDir(m.opts.Root), 0o755); err != nil {
+		m.log.Warnf("cannot create %s: %v", paths.WritableUnitDir(m.opts.Root), err)
 	}
 	if err := os.MkdirAll(paths.LogDir, paths.ModeLogDir); err != nil {
 		return err
@@ -363,15 +381,19 @@ func (m *Manager) loadRegistry() {
 	ctx := unitfile.DefaultSpecifierContext("")
 	ctx.MachineID = m.machineID
 	ctx.BootID = m.bootID
-	m.loader = &unitfile.Loader{Root: m.opts.Root, SpecifierBase: ctx}
+	loader := &unitfile.Loader{Root: m.opts.Root, SpecifierBase: ctx}
 
-	reg, err := m.loader.Load()
+	reg, err := loader.Load()
 	if err != nil {
+		// The previous snapshot and its loader stay in place: a reload that
+		// fails must not leave the manager with no units at all.
 		m.log.Errorf("cannot load unit files: %v", err)
 		return
 	}
+	// Published together, so a reader never pairs a new registry with the
+	// loader of the previous generation.
 	m.regMu.Lock()
-	m.registry = reg
+	m.registry, m.loader = reg, loader
 	m.regMu.Unlock()
 
 	loaded, masked, bad := 0, 0, 0
