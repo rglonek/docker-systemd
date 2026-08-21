@@ -53,5 +53,15 @@ if [ -z "$built" ]; then
     exit 1
 fi
 
-mv "$built" "$outdir/"
-echo "${outdir}/$(basename "$built")"
+out="${outdir}/$(basename "$built")"
+mv "$built" "$out"
+
+# Running under sudo means the rpm lands root-owned, and the release pipeline
+# signs the packages afterwards as the unprivileged user that ran make:
+# rpmsign opens the package read-write, so a root-owned file fails with
+# "open failed: Permission denied". Hand it back to the caller.
+if [ "$(id -u)" = 0 ] && [ -n "${SUDO_UID:-}" ]; then
+    chown "${SUDO_UID}:${SUDO_GID:-$SUDO_UID}" "$out"
+fi
+
+echo "$out"
